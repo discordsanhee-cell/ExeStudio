@@ -1,0 +1,11 @@
+# build outputs / environments (too big for git; installers go to GitHub Releases)
+.venv/
+runtime/
+dist/
+build/
+release/
+build_log.txt
+__pycache__/
+*.pyc
+*.spec
+update_token.txt

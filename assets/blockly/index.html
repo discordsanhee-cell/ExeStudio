@@ -1,0 +1,557 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>블록 코딩</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; font-family: "Segoe UI", "Malgun Gothic", sans-serif; }
+  #ws { position: absolute; inset: 0; }
+  .blocklyTreeLabel, .blocklyText, .blocklyFlyoutLabelText { font-family: "Malgun Gothic", "Segoe UI", sans-serif !important; }
+  .blocklyTreeRow { height: 34px; line-height: 34px; border-radius: 0 8px 8px 0; margin-bottom: 2px; }
+</style>
+<script src="blockly_compressed.js"></script>
+<script src="blocks_compressed.js"></script>
+<script src="python_compressed.js"></script>
+<script src="msg/ko.js"></script>
+</head>
+<body>
+<div id="ws"></div>
+<script>
+const G = python.pythonGenerator, O = python.Order;
+G.INDENT = "    ";
+G.INFINITE_LOOP_TRAP = "_tick()\n";
+const DARK = new URLSearchParams(location.search).get("dark") === "1";
+
+// ------------------------------------------------------------------ widgets from the GUI designer
+let WIDGETS = [];  // [{name, type, label}]
+const WTYPES = {
+  text: ["label", "button", "input", "textbox", "checkbox", "radio", "combo", "list"],
+  value: ["slider", "progress", "spin", "checkbox", "radio", "combo", "list", "input"],
+  check: ["checkbox", "radio"],
+  change: ["input", "textbox", "slider", "spin", "checkbox", "radio", "combo", "list"],
+  list: ["combo", "list"],
+};
+function widgetMenu(kind) {
+  return function () {
+    const types = kind ? WTYPES[kind] : null;
+    const opts = WIDGETS.filter((w) => !types || types.includes(w.type)).map((w) => [w.label, w.name]);
+    const cur = this && this.getValue ? this.getValue() : null;
+    if (cur && cur !== "__none__" && !opts.some((o) => o[1] === cur)) opts.push([cur + " (없음)", cur]);
+    return opts.length ? opts : [["(GUI 디자이너에서 먼저 만드세요)", "__none__"]];
+  };
+}
+function setWidgets(list) {
+  WIDGETS = list;
+  for (const b of ws.getAllBlocks(false)) {
+    const f = b.getField("W");
+    if (f) f.generatedOptions = null;
+  }
+}
+function renameWidget(oldName, newName) {
+  for (const b of ws.getAllBlocks(false)) {
+    const f = b.getField("W");
+    if (f && f.getValue() === oldName) {
+      f.generatedOptions = null;  // dropdown caches its menu; force it to see the new name
+      f.setValue(newName);
+    }
+  }
+}
+const wfield = (kind) => ({ type: "field_dropdown", name: "W", options: widgetMenu(kind) });
+
+// ------------------------------------------------------------------ helpers placed into generated code
+const DEFS = {
+  import_winsound: "import winsound",
+  import_web: "import webbrowser",
+  import_datetime: "import datetime",
+  import_pyautogui: "import pyautogui",
+  type_helper: "def _type(text):\n    text = str(text)\n    if text.isascii():\n        pyautogui.write(text, interval=0.02)\n    else:\n        _clip(text)\n        time.sleep(0.05)\n        pyautogui.hotkey('ctrl', 'v')\n",
+};
+function need(...keys) {
+  for (const k of keys) {
+    if (k === "type_helper") need("import_pyautogui");
+    G.definitions_[k] = DEFS[k];
+  }
+}
+const val = (b, name, def) => G.valueToCode(b, name, O.NONE) || def;
+const body = (b, name) => G.statementToCode(b, name) || G.INDENT + "pass\n";
+const q = (s) => JSON.stringify(String(s));
+G.addReservedWords("_answer,_t,_T,_ui,_tick,_wait,_on,_fire,_broadcast,_alert,_big,_confirm,_ask_text,_ask_number,_clip,_type,_color,_w,_set_text,_get_text,_set_value,_get_value,_set_visible,_set_color,_move,_list_add,_list_clear,_set_title,_key_down,_exit,_num,pyautogui,winsound,webbrowser,datetime,time,math,random,os,sys,threading,MainWindow");
+
+// ------------------------------------------------------------------ block definitions
+const COLORS = [["🔴 빨강", "red"], ["🟠 주황", "orange"], ["🟡 노랑", "gold"], ["🟢 초록", "green"],
+  ["🔵 파랑", "blue"], ["🟣 보라", "purple"], ["🩷 분홍", "hotpink"], ["⚫ 검정", "black"], ["⚪ 흰색", "white"],
+  ["🩶 회색", "gray"], ["🌈 랜덤", "random"]];
+const KEY_EVENTS = [["스페이스", "space"], ["Enter", "enter"], ["↑ 위쪽 화살표", "up"], ["↓ 아래쪽 화살표", "down"],
+  ["← 왼쪽 화살표", "left"], ["→ 오른쪽 화살표", "right"], ["Esc", "esc"], ["Tab", "tab"], ["Backspace", "backspace"],
+  ["Shift", "shift"], ["Ctrl", "ctrl"]]
+  .concat("abcdefghijklmnopqrstuvwxyz".split("").map((c) => [c.toUpperCase(), c]))
+  .concat("0123456789".split("").map((c) => [c, c]))
+  .concat([...Array(12).keys()].map((i) => ["F" + (i + 1), "f" + (i + 1)]));
+const PRESS_KEYS = [["Enter", "enter"], ["스페이스", "space"], ["Tab", "tab"], ["Esc", "esc"], ["Backspace", "backspace"],
+  ["Delete", "delete"], ["↑", "up"], ["↓", "down"], ["←", "left"], ["→", "right"], ["Home", "home"], ["End", "end"],
+  ["F5", "f5"], ["윈도우 키", "win"]];
+
+const C_EV = 35, C_UI = 200, C_W = 330, C_TIME = 45, C_SYS = 15, C_AUTO = 290, C_TURTLE = 160, C_LOOP = 120;
+const stmt = (o) => Object.assign({ previousStatement: null, nextStatement: null, inputsInline: true }, o);
+const hatDef = (o) => Object.assign({ nextStatement: null, inputsInline: true, colour: C_EV }, o);
+const num = (name) => ({ type: "input_value", name, check: "Number" });
+const any = (name) => ({ type: "input_value", name });
+const dd = (name, options) => ({ type: "field_dropdown", name, options });
+
+Blockly.common.defineBlocksWithJsonArray([
+  // 시작 · 이벤트 (hats)
+  hatDef({ type: "ev_start", message0: "🚩 프로그램이 시작되면", tooltip: "프로그램을 실행하면 아래 블록들이 실행돼요" }),
+  hatDef({ type: "ev_key", message0: "⌨ %1 키를 눌렀을 때", args0: [dd("KEY", [["아무", "any"]].concat(KEY_EVENTS))] }),
+  hatDef({ type: "ev_click", message0: "🖱 %1 을(를) 클릭했을 때", args0: [wfield(null)] }),
+  hatDef({ type: "ev_change", message0: "✏ %1 의 값이 바뀌었을 때", args0: [wfield("change")] }),
+  hatDef({ type: "ev_every", message0: "⏰ %1 초마다", args0: [{ type: "field_number", name: "SEC", value: 1, min: 0.01 }] }),
+  hatDef({ type: "ev_msg", message0: "📨 %1 신호를 받았을 때", args0: [{ type: "field_input", name: "MSG", text: "신호1" }] }),
+  stmt({ type: "msg_send", message0: "📨 %1 신호 보내기", args0: [{ type: "field_input", name: "MSG", text: "신호1" }], colour: C_EV }),
+  { type: "key_down", message0: "⌨ %1 키가 눌려 있나?", args0: [dd("KEY", KEY_EVENTS)], output: "Boolean", colour: C_EV },
+  // 화면 요소 (designer widgets)
+  stmt({ type: "w_set_text", message0: "🧱 %1 의 글자를 %2 (으)로 바꾸기", args0: [wfield("text"), any("V")], colour: C_W }),
+  { type: "w_get_text", message0: "🧱 %1 의 글자", args0: [wfield("text")], output: "String", colour: C_W },
+  stmt({ type: "w_set_value", message0: "🧱 %1 의 값을 %2 (으)로 정하기", args0: [wfield("value"), any("V")], colour: C_W }),
+  stmt({ type: "w_add_value", message0: "🧱 %1 의 값을 %2 만큼 바꾸기", args0: [wfield("value"), num("V")], colour: C_W }),
+  { type: "w_get_value", message0: "🧱 %1 의 값", args0: [wfield("value")], output: null, colour: C_W },
+  { type: "w_checked", message0: "🧱 %1 이(가) 선택되어 있나?", args0: [wfield("check")], output: "Boolean", colour: C_W },
+  stmt({ type: "w_vis", message0: "🧱 %1 %2", args0: [wfield(null), dd("MODE", [["보이기", "show"], ["숨기기", "hide"], ["사용 가능하게", "enable"], ["사용 못 하게", "disable"]])], colour: C_W }),
+  stmt({ type: "w_color", message0: "🧱 %1 의 %2 을(를) %3 (으)로", args0: [wfield(null), dd("WHICH", [["글자색", "color"], ["배경색", "background"]]), dd("C", COLORS)], colour: C_W }),
+  stmt({ type: "w_move", message0: "🧱 %1 을(를) x %2 y %3 위치로", args0: [wfield(null), num("X"), num("Y")], colour: C_W }),
+  stmt({ type: "w_list_add", message0: "🧱 %1 에 %2 항목 추가", args0: [wfield("list"), any("V")], colour: C_W }),
+  stmt({ type: "w_list_clear", message0: "🧱 %1 항목 모두 지우기", args0: [wfield("list")], colour: C_W }),
+  stmt({ type: "win_title", message0: "🪟 창 제목을 %1 (으)로", args0: [any("V")], colour: C_W }),
+  // 창 · 대화상자
+  stmt({ type: "ui_alert", message0: "📢 메시지 상자 %1", args0: [any("TEXT")], colour: C_UI, tooltip: "알림 창을 띄워요" }),
+  stmt({ type: "ui_big", message0: "🪟 큰 글씨 창  제목 %1 내용 %2", args0: [any("TITLE"), any("TEXT")], colour: C_UI }),
+  stmt({ type: "ui_ask", message0: "💬 %1 을(를) 묻고 대답 기다리기", args0: [any("TEXT")], colour: C_UI,
+    tooltip: "질문 창을 띄우고, 입력한 내용은 '대답' 블록에 저장돼요" }),
+  { type: "ui_answer", message0: "💬 대답", output: null, colour: C_UI, tooltip: "가장 최근 질문에 입력한 대답" },
+  { type: "ui_ask_text", message0: "💬 질문하기 %1", args0: [any("TEXT")], output: "String", colour: C_UI, inputsInline: true },
+  { type: "ui_ask_number", message0: "🔢 숫자 물어보기 %1", args0: [any("TEXT")], output: "Number", colour: C_UI, inputsInline: true },
+  { type: "ui_confirm", message0: "❓ 예/아니오 묻기 %1", args0: [any("TEXT")], output: "Boolean", colour: C_UI, inputsInline: true },
+  // 시간
+  stmt({ type: "time_sleep", message0: "⏱ %1 초 기다리기", args0: [num("SEC")], colour: C_TIME }),
+  { type: "time_now", message0: "🕒 현재 시각", output: "String", colour: C_TIME },
+  { type: "time_today", message0: "📅 오늘 날짜", output: "String", colour: C_TIME },
+  // 반복
+  { type: "ctrl_forever", message0: "🔁 계속 반복하기", message1: "%1", args1: [{ type: "input_statement", name: "DO" }],
+    previousStatement: null, colour: C_LOOP, tooltip: "프로그램을 끝낼 때까지 계속 반복해요" },
+  // 컴퓨터
+  stmt({ type: "sys_url", message0: "🌐 웹사이트 열기 %1", args0: [any("URL")], colour: C_SYS }),
+  stmt({ type: "sys_run", message0: "▶ 프로그램/명령 실행 %1", args0: [any("CMD")], colour: C_SYS }),
+  stmt({ type: "sys_beep", message0: "🔔 띵 소리 내기", colour: C_SYS }),
+  stmt({ type: "sys_write", message0: "📄 파일 %1 에 %2 %3", args0: [any("PATH"), any("TEXT"), dd("MODE", [["덮어쓰기", "w"], ["이어쓰기", "a"]])], colour: C_SYS }),
+  { type: "sys_read", message0: "📄 파일 %1 읽기", args0: [any("PATH")], output: "String", colour: C_SYS, inputsInline: true },
+  stmt({ type: "sys_clip", message0: "📋 클립보드에 %1 복사", args0: [any("TEXT")], colour: C_SYS }),
+  { type: "sys_exit", message0: "⛔ 프로그램 끝내기", previousStatement: null, colour: C_SYS },
+  // 마우스 · 키보드 자동화
+  stmt({ type: "auto_click_xy", message0: "🖱 x %1 y %2 클릭", args0: [num("X"), num("Y")], colour: C_AUTO }),
+  stmt({ type: "auto_click", message0: "🖱 지금 위치 %1", args0: [dd("BTN", [["클릭", "click"], ["더블클릭", "doubleClick"], ["오른쪽 클릭", "rightClick"]])], colour: C_AUTO }),
+  stmt({ type: "auto_move", message0: "🖱 마우스를 x %1 y %2 로 이동", args0: [num("X"), num("Y")], colour: C_AUTO }),
+  stmt({ type: "auto_type", message0: "⌨ 글자 입력 %1", args0: [any("TEXT")], colour: C_AUTO }),
+  stmt({ type: "auto_key", message0: "⌨ %1 키 누르기", args0: [dd("KEY", PRESS_KEYS)], colour: C_AUTO }),
+  stmt({ type: "auto_hotkey", message0: "⌨ 단축키 %1", args0: [{ type: "field_input", name: "KEYS", text: "ctrl+c" }], colour: C_AUTO }),
+  stmt({ type: "auto_scroll", message0: "🖱 스크롤 %1", args0: [num("N")], colour: C_AUTO, tooltip: "양수=위, 음수=아래" }),
+  stmt({ type: "auto_shot", message0: "📸 화면 캡처해서 %1 에 저장", args0: [any("PATH")], colour: C_AUTO }),
+  { type: "auto_pos", message0: "🖱 마우스 %1 좌표", args0: [dd("AXIS", [["x", "x"], ["y", "y"]])], output: "Number", colour: C_AUTO },
+  // 거북이 (무대)
+  stmt({ type: "t_move", message0: "🐢 %1 %2 만큼 이동", args0: [dd("DIR", [["앞으로", "forward"], ["뒤로", "back"]]), num("N")], colour: C_TURTLE }),
+  stmt({ type: "t_turn", message0: "🐢 %1 으로 %2 도 돌기", args0: [dd("DIR", [["오른쪽", "right"], ["왼쪽", "left"]]), num("N")], colour: C_TURTLE }),
+  stmt({ type: "t_goto", message0: "🐢 x %1 y %2 로 가기", args0: [num("X"), num("Y")], colour: C_TURTLE }),
+  stmt({ type: "t_circle", message0: "⭕ 반지름 %1 원 그리기", args0: [num("R")], colour: C_TURTLE }),
+  stmt({ type: "t_color", message0: "🎨 펜 색 %1", args0: [dd("C", COLORS)], colour: C_TURTLE }),
+  stmt({ type: "t_bg", message0: "🖼 무대 배경색 %1", args0: [dd("C", COLORS)], colour: C_TURTLE }),
+  stmt({ type: "t_width", message0: "✏ 펜 굵기 %1", args0: [num("N")], colour: C_TURTLE }),
+  stmt({ type: "t_pen", message0: "✏ 펜 %1", args0: [dd("P", [["내리기 (그리기)", "pendown"], ["올리기 (안 그리기)", "penup"]])], colour: C_TURTLE }),
+  stmt({ type: "t_fill", message0: "🪣 색 채우기 %1", args0: [dd("F", [["시작", "begin_fill"], ["끝", "end_fill"]])], colour: C_TURTLE }),
+  stmt({ type: "t_speed", message0: "⚡ 속도 %1", args0: [dd("S", [["최고 속도", "0"], ["빠르게", "10"], ["보통", "6"], ["느리게", "1"]])], colour: C_TURTLE }),
+  stmt({ type: "t_write", message0: "🔤 글자 쓰기 %1", args0: [any("TEXT")], colour: C_TURTLE }),
+  stmt({ type: "t_misc", message0: "🐢 %1", args0: [dd("A", [["거북이 숨기기", "hideturtle"], ["거북이 보이기", "showturtle"], ["처음 위치로", "home"], ["그림 지우기", "clear"]])], colour: C_TURTLE }),
+  { type: "t_pos", message0: "🐢 거북이 %1 좌표", args0: [dd("AXIS", [["x", "x"], ["y", "y"]])], output: "Number", colour: C_TURTLE },
+]);
+// event blocks get the round "hat" top
+for (const t of ["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg"]) {
+  const orig = Blockly.Blocks[t].init;
+  Blockly.Blocks[t].init = function () { orig.call(this); this.hat = "cap"; };
+}
+try { Blockly.libraryBlocks.loops.loopTypes.add("ctrl_forever"); } catch (e) {}
+
+// ------------------------------------------------------------------ code generators
+const F = G.forBlock;
+const call = (code) => [code, O.FUNCTION_CALL];
+const HATS = new Set(["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg"]);
+let hatCount = 0;
+function hat(b, deco) {
+  hatCount++;
+  let code = "";
+  const next = b.getNextBlock();
+  if (next) {
+    code = G.blockToCode(next);
+    if (Array.isArray(code)) code = code[0];
+  }
+  const vars = Blockly.Variables.allUsedVarModels(b.workspace).map((v) => G.getVariableName(v.getId()));
+  const glob = vars.length ? G.INDENT + "global " + vars.join(", ") + "\n" : "";
+  const inner = code.trim() ? G.prefixLines(code, G.INDENT) : G.INDENT + "pass\n";
+  return `${deco}\ndef _event_${hatCount}():\n${glob}${inner}\n`;
+}
+F.ev_start = (b) => hat(b, "@_on('start')");
+F.ev_key = (b) => hat(b, `@_on('key', ${q(b.getFieldValue("KEY"))})`);
+F.ev_click = (b) => hat(b, `@_on('click', ${q(b.getFieldValue("W"))})`);
+F.ev_change = (b) => hat(b, `@_on('change', ${q(b.getFieldValue("W"))})`);
+F.ev_every = (b) => hat(b, `@_on('every', ${Number(b.getFieldValue("SEC")) || 1})`);
+F.ev_msg = (b) => hat(b, `@_on('msg', ${q(b.getFieldValue("MSG"))})`);
+F.msg_send = (b) => `_broadcast(${q(b.getFieldValue("MSG"))})\n`;
+F.key_down = (b) => call(`_key_down(${q(b.getFieldValue("KEY"))})`);
+
+const W = (b) => q(b.getFieldValue("W"));
+F.w_set_text = (b) => `_set_text(${W(b)}, ${val(b, "V", "''")})\n`;
+F.w_get_text = (b) => call(`_get_text(${W(b)})`);
+F.w_set_value = (b) => `_set_value(${W(b)}, ${val(b, "V", "0")})\n`;
+F.w_add_value = (b) => `_set_value(${W(b)}, _num(_get_value(${W(b)})) + ${val(b, "V", "1")})\n`;
+F.w_get_value = (b) => call(`_get_value(${W(b)})`);
+F.w_checked = (b) => call(`bool(_get_value(${W(b)}))`);
+F.w_vis = (b) => `_set_visible(${W(b)}, '${b.getFieldValue("MODE")}')\n`;
+F.w_color = (b) => `_set_color(${W(b)}, '${b.getFieldValue("WHICH")}', '${b.getFieldValue("C")}')\n`;
+F.w_move = (b) => `_move(${W(b)}, ${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`;
+F.w_list_add = (b) => `_list_add(${W(b)}, ${val(b, "V", "''")})\n`;
+F.w_list_clear = (b) => `_list_clear(${W(b)})\n`;
+F.win_title = (b) => `_set_title(${val(b, "V", "''")})\n`;
+
+F.ui_alert = (b) => `_alert(${val(b, "TEXT", "''")})\n`;
+F.ui_big = (b) => `_big(${val(b, "TITLE", "''")}, ${val(b, "TEXT", "''")})\n`;
+F.ui_ask = (b) => `_ask_text(${val(b, "TEXT", "''")})\n`;
+F.ui_answer = () => call("_answer()");
+F.ui_ask_text = (b) => call(`_ask_text(${val(b, "TEXT", "''")})`);
+F.ui_ask_number = (b) => call(`_ask_number(${val(b, "TEXT", "''")})`);
+F.ui_confirm = (b) => call(`_confirm(${val(b, "TEXT", "''")})`);
+F.text_prompt_ext = (b) => call(`${b.getFieldValue("TYPE") === "NUMBER" ? "_ask_number" : "_ask_text"}(${val(b, "TEXT", "''")})`);
+F.time_sleep = (b) => `_wait(${val(b, "SEC", "1")})\n`;
+F.time_now = () => { need("import_datetime"); return call("datetime.datetime.now().strftime('%H:%M:%S')"); };
+F.time_today = () => { need("import_datetime"); return call("datetime.date.today().strftime('%Y-%m-%d')"); };
+F.ctrl_forever = (b) => `while True:\n${G.INDENT}_tick()\n${G.statementToCode(b, "DO")}`;
+F.sys_url = (b) => { need("import_web"); return `webbrowser.open(str(${val(b, "URL", "''")}))\n`; };
+F.sys_run = (b) => `subprocess.Popen(str(${val(b, "CMD", "''")}), shell=True)\n`;
+F.sys_beep = () => { need("import_winsound"); return "winsound.MessageBeep()\n"; };
+F.sys_write = (b) => `with open(str(${val(b, "PATH", "'memo.txt'")}), '${b.getFieldValue("MODE")}', encoding='utf-8') as _f:\n    _f.write(str(${val(b, "TEXT", "''")}) + '\\n')\n`;
+F.sys_read = (b) => call(`open(str(${val(b, "PATH", "'memo.txt'")}), encoding='utf-8').read()`);
+F.sys_clip = (b) => `_clip(${val(b, "TEXT", "''")})\n`;
+F.sys_exit = () => "_exit()\n";
+F.auto_click_xy = (b) => { need("import_pyautogui"); return `pyautogui.click(${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`; };
+F.auto_click = (b) => { need("import_pyautogui"); return `pyautogui.${b.getFieldValue("BTN")}()\n`; };
+F.auto_move = (b) => { need("import_pyautogui"); return `pyautogui.moveTo(${val(b, "X", "0")}, ${val(b, "Y", "0")}, duration=0.2)\n`; };
+F.auto_type = (b) => { need("type_helper"); return `_type(${val(b, "TEXT", "''")})\n`; };
+F.auto_key = (b) => { need("import_pyautogui"); return `pyautogui.press('${b.getFieldValue("KEY")}')\n`; };
+F.auto_hotkey = (b) => {
+  need("import_pyautogui");
+  const keys = b.getFieldValue("KEYS").split("+").map((k) => `'${k.trim().toLowerCase().replace(/'/g, "")}'`).join(", ");
+  return `pyautogui.hotkey(${keys})\n`;
+};
+F.auto_scroll = (b) => { need("import_pyautogui"); return `pyautogui.scroll(int(${val(b, "N", "100")}))\n`; };
+F.auto_shot = (b) => { need("import_pyautogui"); return `pyautogui.screenshot(str(${val(b, "PATH", "'screen.png'")}))\n`; };
+F.auto_pos = (b) => { need("import_pyautogui"); return call(`pyautogui.position().${b.getFieldValue("AXIS")}`); };
+F.t_move = (b) => `_T.${b.getFieldValue("DIR")}(${val(b, "N", "100")})\n`;
+F.t_turn = (b) => `_T.${b.getFieldValue("DIR")}(${val(b, "N", "90")})\n`;
+F.t_goto = (b) => `_T.goto(${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`;
+F.t_circle = (b) => `_T.circle(${val(b, "R", "50")})\n`;
+F.t_color = (b) => `_T.color('${b.getFieldValue("C")}')\n`;
+F.t_bg = (b) => `_T.bgcolor('${b.getFieldValue("C")}')\n`;
+F.t_width = (b) => `_T.width(${val(b, "N", "2")})\n`;
+F.t_pen = (b) => `_T.${b.getFieldValue("P")}()\n`;
+F.t_fill = (b) => `_T.${b.getFieldValue("F")}()\n`;
+F.t_speed = (b) => `_T.speed(${b.getFieldValue("S")})\n`;
+F.t_write = (b) => `_T.write(${val(b, "TEXT", "''")})\n`;
+F.t_misc = (b) => `_T.${b.getFieldValue("A")}()\n`;
+F.t_pos = (b) => call(`_T.pos('${b.getFieldValue("AXIS")}')`);
+
+// ------------------------------------------------------------------ toolbox
+const T = (text) => ({ shadow: { type: "text", fields: { TEXT: text } } });
+const N = (n) => ({ shadow: { type: "math_number", fields: { NUM: n } } });
+const blk = (type, inputs, fields) => ({ kind: "block", type, inputs, fields });
+const cat = (name, colour, contents) => ({ kind: "category", name, colour: String(colour), contents });
+const label = (text) => ({ kind: "label", text });
+
+const toolbox = { kind: "categoryToolbox", contents: [
+  cat("🚩 시작·이벤트", C_EV, [
+    label("이 블록 아래에 붙인 블록만 실행돼요"),
+    blk("ev_start"), blk("ev_click"), blk("ev_key"), blk("ev_change"), blk("ev_every"), blk("ev_msg"),
+    blk("msg_send"), blk("key_down"),
+  ]),
+  cat("🧱 화면 요소", C_W, [
+    label("GUI 디자이너에서 만든 버튼·라벨 등을 조종해요"),
+    blk("w_set_text", { V: T("안녕!") }), blk("w_get_text"),
+    blk("w_set_value", { V: N(50) }), blk("w_add_value", { V: N(10) }), blk("w_get_value"), blk("w_checked"),
+    blk("w_vis"), blk("w_color"), blk("w_move", { X: N(20), Y: N(20) }),
+    blk("w_list_add", { V: T("새 항목") }), blk("w_list_clear"), blk("win_title", { V: T("새 제목") }),
+  ]),
+  cat("🪟 창·대화상자", C_UI, [
+    label("질문 아래에 빈 칸('비어 있나?', 비교 등)을 놓으면 '대답'이 자동으로 들어가요"),
+    blk("ui_ask", { TEXT: T("이름이 뭐예요?") }),
+    blk("ui_answer"),
+    { kind: "block", type: "text_isEmpty" },
+    blk("ui_alert", { TEXT: T("안녕하세요!") }),
+    blk("ui_big", { TITLE: T("결과"), TEXT: T("큰 글씨로 보여줘요") }),
+    blk("ui_ask_text", { TEXT: T("이름이 뭐예요?") }),
+    blk("ui_ask_number", { TEXT: T("숫자를 입력하세요") }),
+    blk("ui_confirm", { TEXT: T("계속할까요?") }),
+  ]),
+  cat("🔁 반복·조건", C_LOOP, [
+    blk("controls_repeat_ext", { TIMES: N(10) }), blk("ctrl_forever"), blk("controls_whileUntil"),
+    blk("controls_for", { FROM: N(1), TO: N(10), BY: N(1) }), blk("controls_forEach"), blk("controls_flow_statements"),
+    blk("controls_if"), { kind: "block", type: "controls_if", extraState: { hasElse: true } },
+    blk("logic_compare"), blk("logic_operation"), blk("logic_negate"), blk("logic_boolean"), blk("logic_ternary"),
+  ]),
+  cat("⏱ 시간", C_TIME, [blk("time_sleep", { SEC: N(1) }), blk("time_now"), blk("time_today")]),
+  cat("🔢 계산", "%{BKY_MATH_HUE}", [
+    blk("math_number"), blk("math_arithmetic", { A: N(1), B: N(1) }),
+    blk("math_random_int", { FROM: N(1), TO: N(100) }), blk("math_random_float"),
+    blk("math_single", { NUM: N(9) }), blk("math_round", { NUM: N(3.1) }), blk("math_modulo", { DIVIDEND: N(64), DIVISOR: N(10) }),
+    blk("math_number_property", { NUMBER_TO_CHECK: N(0) }), blk("math_constrain", { VALUE: N(50), LOW: N(1), HIGH: N(100) }),
+  ]),
+  cat("🔤 글자", "%{BKY_TEXTS_HUE}", [
+    blk("text"), blk("text_join"), blk("text_length"), blk("text_isEmpty"),
+    blk("text_indexOf", { FIND: T("a") }), blk("text_changeCase", { TEXT: T("abc") }), blk("text_trim", { TEXT: T(" abc ") }),
+    blk("text_print", { TEXT: T("콘솔에 출력") }),
+  ]),
+  cat("📋 리스트", "%{BKY_LISTS_HUE}", [
+    blk("lists_create_empty"), blk("lists_create_with"), blk("lists_repeat", { NUM: N(5) }), blk("lists_length"),
+    blk("lists_isEmpty"), blk("lists_getIndex"), blk("lists_setIndex"), blk("lists_sort"),
+  ]),
+  cat("🐢 거북이(무대)", C_TURTLE, [
+    label("디자이너에 '무대'를 놓으면 그 안에, 없으면 새 창에 그려요"),
+    blk("t_move", { N: N(100) }), blk("t_turn", { N: N(90) }), blk("t_goto", { X: N(0), Y: N(0) }), blk("t_circle", { R: N(50) }),
+    blk("t_color"), blk("t_bg"), blk("t_width", { N: N(3) }), blk("t_pen"), blk("t_fill"), blk("t_speed"),
+    blk("t_write", { TEXT: T("안녕!") }), blk("t_misc"), blk("t_pos"),
+  ]),
+  cat("💻 컴퓨터", C_SYS, [
+    blk("sys_url", { URL: T("https://www.google.com") }), blk("sys_run", { CMD: T("notepad.exe") }), blk("sys_beep"),
+    blk("sys_write", { PATH: T("memo.txt"), TEXT: T("메모 내용") }), blk("sys_read", { PATH: T("memo.txt") }),
+    blk("sys_clip", { TEXT: T("복사할 글자") }), blk("sys_exit"),
+  ]),
+  cat("🖱 마우스·키보드", C_AUTO, [
+    blk("auto_click"), blk("auto_click_xy", { X: N(500), Y: N(300) }), blk("auto_move", { X: N(500), Y: N(300) }),
+    blk("auto_type", { TEXT: T("Hello!") }), blk("auto_key"), blk("auto_hotkey"), blk("auto_scroll", { N: N(-300) }),
+    blk("auto_shot", { PATH: T("screen.png") }), blk("auto_pos"),
+  ]),
+  { kind: "sep" },
+  { kind: "category", name: "📦 변수", colour: "%{BKY_VARIABLES_HUE}", custom: "VARIABLE" },
+  { kind: "category", name: "🧩 함수(나만의 블록)", colour: "%{BKY_PROCEDURES_HUE}", custom: "PROCEDURE" },
+]};
+
+// ------------------------------------------------------------------ theme + workspace
+const theme = Blockly.Theme.defineTheme(DARK ? "esdark" : "eslight", {
+  base: Blockly.Themes.Classic,
+  componentStyles: DARK ? {
+    workspaceBackgroundColour: "#16171f", toolboxBackgroundColour: "#1c1d27", toolboxForegroundColour: "#e7e8f0",
+    flyoutBackgroundColour: "#22232f", flyoutForegroundColour: "#cfd1e6", flyoutOpacity: 0.97,
+    scrollbarColour: "#4a4c66", scrollbarOpacity: 0.7, insertionMarkerColour: "#ffffff", insertionMarkerOpacity: 0.3,
+    cursorColour: "#7c6cff",
+  } : {
+    workspaceBackgroundColour: "#f6f7fb", toolboxBackgroundColour: "#ffffff", toolboxForegroundColour: "#1b1d29",
+    flyoutBackgroundColour: "#eef0f6", flyoutForegroundColour: "#3a3d52", flyoutOpacity: 0.97,
+  },
+  fontStyle: { family: "Malgun Gothic, Segoe UI, sans-serif", weight: "bold", size: 11 },
+});
+
+const ws = Blockly.inject("ws", {
+  toolbox, theme, renderer: "zelos", media: "media/", sounds: false, trashcan: true,
+  grid: { spacing: 24, length: 2, colour: DARK ? "#2a2c3c" : "#dde0ea", snap: true },
+  zoom: { controls: true, wheel: true, startScale: 0.85, maxScale: 2.5, minScale: 0.3, scaleSpeed: 1.15 },
+  move: { scrollbars: true, drag: true, wheel: false },
+});
+
+// ------------------------------------------------------------------ "대답" auto-fill (like Entry)
+// When a block with an empty slot (e.g. "~이(가) 비어 있나?") is dropped below a question, plug in "대답".
+const AUTO_INPUT = { text_isEmpty: "VALUE", logic_compare: "A", text_length: "VALUE", text_changeCase: "TEXT",
+  text_trim: "TEXT", text_indexOf: "VALUE" };
+function enclosingStatement(b) {
+  let s = b;
+  while (s && !s.previousConnection && !s.nextConnection) s = s.getParent();
+  return s;
+}
+function askBefore(b) {
+  let cur = enclosingStatement(b);
+  for (let i = 0; cur && i < 300; i++) {
+    cur = cur.getPreviousBlock();
+    if (!cur) return false;
+    if (cur.type === "ui_ask" || cur.getDescendants(false).some((d) => d.type === "ui_ask_text" || d.type === "ui_ask_number"))
+      return true;
+  }
+  return false;
+}
+function autoFill(root, group) {
+  for (const blk of [root, ...root.getDescendants(false)]) {
+    const name = AUTO_INPUT[blk.type];
+    const inp = name && blk.getInput(name);
+    if (!inp || !inp.connection) continue;
+    const t = inp.connection.targetBlock();
+    if ((t && !t.isShadow()) || !askBefore(blk)) continue;
+    Blockly.Events.setGroup(group || true);
+    try {
+      const a = ws.newBlock("ui_answer");
+      a.initSvg();
+      a.render();
+      inp.connection.connect(a.outputConnection);
+    } finally {
+      Blockly.Events.setGroup(false);
+    }
+  }
+}
+ws.addChangeListener((e) => {
+  if (e.type !== Blockly.Events.BLOCK_MOVE || !e.newParentId) return;
+  const b = ws.getBlockById(e.blockId);
+  if (b && b.type !== "ui_answer") autoFill(b, e.group);
+});
+
+// ------------------------------------------------------------------ API used from Python
+let changeCount = 0;
+ws.addChangeListener((e) => { if (!e.isUiEvent) changeCount++; });
+function getCode() {
+  hatCount = 0;
+  G.init(ws);
+  const parts = [];
+  let loose = 0;
+  for (const b of ws.getTopBlocks(true)) {
+    if (!b.isEnabled()) continue;
+    if (HATS.has(b.type) || b.type.startsWith("procedures_def")) {
+      let c = G.blockToCode(b, true);
+      if (Array.isArray(c)) c = c[0];
+      if (c) parts.push(c);
+    } else if (b.previousConnection || b.nextConnection) {
+      loose++;
+    }
+  }
+  const code = G.finish(parts.join("\n")).replace(/\n{3,}/g, "\n\n");
+  return { code, loose };
+}
+function getState() { const r = getCode(); return JSON.stringify({ n: changeCount, code: r.code, loose: r.loose }); }
+function saveWs() { return JSON.stringify(Blockly.serialization.workspaces.save(ws)); }
+function rememberWidgetNames(obj) {
+  // keep widget names used by loaded blocks valid even if the designer no longer has them
+  const walk = (o) => {
+    if (!o || typeof o !== "object") return;
+    if (o.fields && typeof o.fields.W === "string" && !WIDGETS.some((w) => w.name === o.fields.W) && o.fields.W !== "__none__")
+      WIDGETS.push({ name: o.fields.W, type: "?", label: o.fields.W + " (없음)" });
+    for (const k in o) walk(o[k]);
+  };
+  walk(obj);
+}
+function fitView() {
+  Blockly.svgResize(ws);
+  ws.zoomToFit();
+  if (ws.getScale() > 0.9) ws.setScale(0.9);
+  ws.scrollCenter();
+}
+function loadWs(obj) {
+  rememberWidgetNames(obj);
+  ws.clear();
+  Blockly.serialization.workspaces.load(obj, ws);
+  setTimeout(fitView, 60);
+}
+function clearWs() { ws.clear(); }
+function loadExample(name) { if (EXAMPLES[name]) loadWs(EXAMPLES[name]); }
+function addEventFor(widget, kind) {
+  const b = ws.newBlock(kind === "change" ? "ev_change" : "ev_click");
+  b.setFieldValue(widget, "W");
+  b.initSvg();
+  b.render();
+  const m = ws.getMetricsManager().getViewMetrics(true);
+  b.moveBy(m.left + 40, m.top + 40 + Math.random() * 60);
+  b.select();
+}
+window.addEventListener("resize", () => { if (!window.esdFitted && ws.getAllBlocks(false).length) { window.esdFitted = true; fitView(); } });
+
+// ------------------------------------------------------------------ examples
+const tx = (t) => ({ block: { type: "text", fields: { TEXT: t } } });
+const nm = (n) => ({ block: { type: "math_number", fields: { NUM: n } } });
+const getv = (id) => ({ block: { type: "variables_get", fields: { VAR: { id } } } });
+const chain = (list) => {
+  for (let i = list.length - 2; i >= 0; i--) list[i].next = { block: list[i + 1] };
+  return list[0];
+};
+const alert = (input) => ({ type: "ui_alert", inputs: { TEXT: input } });
+const onStart = (x, y, list) => ({ type: "ev_start", x, y, next: { block: chain(list) } });
+const onKey = (key, x, y, list) => ({ type: "ev_key", fields: { KEY: key }, x, y, next: { block: chain(list) } });
+
+const EXAMPLES = {
+  "👋 인사 프로그램": {
+    blocks: { languageVersion: 0, blocks: [onStart(40, 40, [
+      { type: "ui_ask", inputs: { TEXT: tx("이름이 뭐예요?") } },
+      { type: "controls_if", extraState: { hasElse: true }, inputs: {
+        IF0: { block: { type: "text_isEmpty", inputs: { VALUE: { block: { type: "ui_answer" } } } } },
+        DO0: { block: { type: "ui_big", inputs: { TITLE: tx("인사"), TEXT: tx("이름을 안 알려줬네요 😢") } } },
+        ELSE: { block: { type: "ui_big", inputs: { TITLE: tx("인사"), TEXT: { block: { type: "text_join",
+          extraState: { itemCount: 3 }, inputs: { ADD0: tx("안녕하세요, "), ADD1: { block: { type: "ui_answer" } },
+            ADD2: tx("님! 👋") } } } } } },
+      } },
+    ])] },
+  },
+  "🎯 숫자 맞히기 게임": {
+    variables: [{ name: "answer", id: "v_a" }, { name: "guess", id: "v_g" }, { name: "tries", id: "v_t" }],
+    blocks: { languageVersion: 0, blocks: [onStart(40, 40, [
+      { type: "variables_set", fields: { VAR: { id: "v_a" } },
+        inputs: { VALUE: { block: { type: "math_random_int", inputs: { FROM: nm(1), TO: nm(100) } } } } },
+      { type: "variables_set", fields: { VAR: { id: "v_t" } }, inputs: { VALUE: nm(0) } },
+      { type: "ctrl_forever", inputs: { DO: { block: chain([
+        { type: "variables_set", fields: { VAR: { id: "v_g" } },
+          inputs: { VALUE: { block: { type: "ui_ask_number", inputs: { TEXT: tx("1~100 사이 숫자를 맞혀 보세요!") } } } } },
+        { type: "math_change", fields: { VAR: { id: "v_t" } }, inputs: { DELTA: nm(1) } },
+        { type: "controls_if", extraState: { elseIfCount: 1, hasElse: true }, inputs: {
+          IF0: { block: { type: "logic_compare", fields: { OP: "EQ" }, inputs: { A: getv("v_g"), B: getv("v_a") } } },
+          DO0: { block: chain([
+            alert({ block: { type: "text_join", extraState: { itemCount: 3 },
+              inputs: { ADD0: tx("정답! 🎉 "), ADD1: getv("v_t"), ADD2: tx("번 만에 맞혔어요") } } }),
+            { type: "controls_flow_statements", fields: { FLOW: "BREAK" } },
+          ]) },
+          IF1: { block: { type: "logic_compare", fields: { OP: "LT" }, inputs: { A: getv("v_g"), B: getv("v_a") } } },
+          DO1: { block: alert(tx("더 큰 수예요 ⬆")) },
+          ELSE: { block: alert(tx("더 작은 수예요 ⬇")) },
+        } },
+      ]) } } },
+    ])] },
+  },
+  "🌟 거북이 별 그리기": {
+    blocks: { languageVersion: 0, blocks: [onStart(40, 40, [
+      { type: "t_bg", fields: { C: "black" } },
+      { type: "t_speed", fields: { S: "10" } },
+      { type: "t_width", inputs: { N: nm(2) } },
+      { type: "controls_repeat_ext", inputs: { TIMES: nm(36), DO: { block: chain([
+        { type: "t_color", fields: { C: "random" } },
+        { type: "t_move", fields: { DIR: "forward" }, inputs: { N: nm(220) } },
+        { type: "t_turn", fields: { DIR: "right" }, inputs: { N: nm(170) } },
+      ]) } } },
+      { type: "t_misc", fields: { A: "hideturtle" } },
+    ])] },
+  },
+  "🏃 방향키로 거북이 조종": {
+    blocks: { languageVersion: 0, blocks: [
+      onStart(40, 30, [
+        { type: "t_speed", fields: { S: "0" } },
+        { type: "t_width", inputs: { N: nm(4) } },
+        alert(tx("무대 창을 클릭하고 방향키로 그림을 그려 보세요! (스페이스 = 색 바꾸기)")),
+      ]),
+      onKey("up", 40, 200, [{ type: "t_move", fields: { DIR: "forward" }, inputs: { N: nm(15) } }]),
+      onKey("down", 40, 330, [{ type: "t_move", fields: { DIR: "back" }, inputs: { N: nm(15) } }]),
+      onKey("left", 420, 200, [{ type: "t_turn", fields: { DIR: "left" }, inputs: { N: nm(15) } }]),
+      onKey("right", 420, 330, [{ type: "t_turn", fields: { DIR: "right" }, inputs: { N: nm(15) } }]),
+      onKey("space", 420, 30, [{ type: "t_color", fields: { C: "random" } }]),
+    ] },
+  },
+  "🖱 자동 클릭 매크로": {
+    blocks: { languageVersion: 0, blocks: [onStart(40, 40, [
+      alert(tx("확인을 누르고 3초 안에 클릭할 곳에 마우스를 올려두세요")),
+      { type: "time_sleep", inputs: { SEC: nm(3) } },
+      { type: "controls_repeat_ext", inputs: { TIMES: nm(10), DO: { block: chain([
+        { type: "auto_click", fields: { BTN: "click" } },
+        { type: "time_sleep", inputs: { SEC: nm(0.5) } },
+      ]) } } },
+      alert(tx("10번 클릭 완료!")),
+    ])] },
+  },
+};
+
+loadExample("👋 인사 프로그램");
+window.esdReady = true;
+</script>
+</body>
+</html>
