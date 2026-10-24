@@ -3,7 +3,12 @@ import os
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout, QHBoxLayout,
                                QHeaderView, QLineEdit, QSpinBox, QTableWidget, QTableWidgetItem)
 
-from .. import updater
+import sys
+
+from PySide6.QtWidgets import QMessageBox
+
+from .. import pathenv, updater
+from ..config import FROZEN
 from ..update_ui import check_for_updates
 
 from ..config import APP_NAME, APP_VERSION, BUNDLED_PYTHON, DATA_DIR, install_dir
@@ -82,6 +87,26 @@ class SettingsPage(Page):
         cl3.addLayout(row3)
         self.root.addWidget(c3)
 
+        cp, cpl = card()
+        cpl.addWidget(label("🧭 PATH에 추가 (명령 프롬프트에서 바로 쓰기)", "H2"))
+        cpl.addWidget(label("내 계정 PATH에만 추가돼요 (관리자 권한 필요 없음). 새로 여는 명령창부터 적용되고, 끄면 깔끔하게 빠져요.",
+                            "Sub", wrap=True))
+        runtime_dir = BUNDLED_PYTHON.parent
+        self.path_items = [
+            (QCheckBox("EXE Studio  →  명령창에서 ExeStudio 로 실행"), [install_dir()],
+             FROZEN and (install_dir() / "ExeStudio.exe").exists()),
+            (QCheckBox("내장 파이썬  →  python, pip, pyinstaller 명령 (이미 깔린 파이썬이 있으면 그쪽이 먼저)"),
+             [runtime_dir, runtime_dir / "Scripts"], BUNDLED_PYTHON.exists()),
+        ]
+        for box, dirs, available in self.path_items:
+            box.setEnabled(bool(available) and sys.platform == "win32")
+            if not available:
+                box.setToolTip("EXE로 실행했을 때만 쓸 수 있어요")
+            box.toggled.connect(lambda on, d=dirs: self._set_path(d, on))
+            cpl.addWidget(box)
+        self.root.addWidget(cp)
+        self._refresh_path_boxes()
+
         cu, cul = card()
         cul.addWidget(label("🔄 업데이트", "H2"))
         fu = QFormLayout()
@@ -121,6 +146,29 @@ class SettingsPage(Page):
         ctx.interpreters_changed.connect(self._fill)
         ctx.python_changed.connect(lambda *_: self._fill())
         self._fill()
+
+    def _refresh_path_boxes(self):
+        if sys.platform != "win32":
+            return
+        for box, dirs, available in self.path_items:
+            box.blockSignals(True)
+            box.setChecked(bool(available) and all(pathenv.contains(d) for d in dirs))
+            box.blockSignals(False)
+
+    def _set_path(self, dirs, on):
+        try:
+            if on:
+                pathenv.add(dirs)
+                self.toast("PATH에 추가했어요. 새로 여는 명령창부터 적용돼요")
+            else:
+                pathenv.remove(dirs)
+                self.toast("PATH에서 뺐어요")
+        except OSError as e:
+            QMessageBox.warning(self, "PATH 변경 실패", str(e))
+        self._refresh_path_boxes()
+
+    def on_show(self):
+        self._refresh_path_boxes()
 
     def _save_update_source(self):
         self.ctx.settings["update_source"] = self.up_source.text().strip()
