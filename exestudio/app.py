@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import traceback
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import (QApplication, QButtonGroup, QFrame, QHBoxLayout, 
 
 from . import theme as theme_mod
 from . import toolchain
-from .config import APP_NAME, APP_VERSION, DATA_DIR, Settings, resource_dir
+from .config import APP_NAME, APP_VERSION, AUTOSAVE_DIR, DATA_DIR, Settings, resource_dir
 from .frameless import FramelessWindow, merge_config
 from .pages.blocks import BlocksPage
 from .pages.build import BuildPage
@@ -208,9 +209,35 @@ class MainWindow(FramelessWindow):
             return
         g = self.normal_geometry()
         self.ctx.settings["geometry"] = [g.x(), g.y(), g.width(), g.height()]
+        self.ctx.settings["clean_exit"] = True
         self.ctx.settings.save()
         super().closeEvent(e)
         QApplication.instance().quit()
+
+    def offer_recovery(self):
+        """After a crash or forced shutdown, offer to bring back the autosaved design and blocks."""
+        design_file, blocks_file = AUTOSAVE_DIR / "design.json", AUTOSAVE_DIR / "blocks.json"
+        found = [f for f in (design_file, blocks_file) if f.exists()]
+        if not found:
+            return
+        answer = QMessageBox.question(
+            self, "작업 복구", "지난번에 EXE Studio가 제대로 꺼지지 않았어요.\n"
+                            "작업하던 GUI 디자인과 블록을 복구할까요?")
+        if answer != QMessageBox.StandardButton.Yes:
+            for f in found:
+                f.unlink(missing_ok=True)
+            return
+        try:
+            if design_file.exists():
+                designer = self.pages["designer"]
+                designer.load_design(json.loads(design_file.read_text(encoding="utf-8")))
+                designer.push_history()
+            if blocks_file.exists():
+                self.pages["blocks"].restore_autosave(json.loads(blocks_file.read_text(encoding="utf-8")))
+            self.goto("blocks" if blocks_file.exists() else "designer")
+            self.toast.show_text("지난 작업을 복구했어요")
+        except (OSError, ValueError) as err:
+            QMessageBox.warning(self, "복구 실패", str(err))
 
 
 def _excepthook(etype, value, tb):
@@ -237,20 +264,25 @@ def main():
     icon = resource_dir() / "assets" / "icon.ico"
     if icon.exists():
         app.setWindowIcon(QIcon(str(icon)))
+    from PySide6.QtCore import QTimer
     settings = Settings()
+    crashed_last_time = not settings.get("clean_exit", True)
+    settings["clean_exit"] = False  # set back to True by a normal close
+    settings.save()
     ctx = AppContext(settings)
     ctx.apply_theme()
     win = MainWindow(ctx)
     ctx.main = win
     win.show()
     ctx.refresh_interpreters()
+    if crashed_last_time and not os.environ.get("EXESTUDIO_SELFTEST"):
+        QTimer.singleShot(1200, win.offer_recovery)
     if settings.get("auto_update", True):
-        from PySide6.QtCore import QTimer
         QTimer.singleShot(2500, lambda: check_for_updates(ctx))
     shot = os.environ.get("EXESTUDIO_SELFTEST")
     if shot:  # opens the given page, saves a screenshot and quits (used to verify packaged builds)
-        from PySide6.QtCore import QTimer
         page = os.environ.get("EXESTUDIO_SELFTEST_PAGE", "blocks")
         QTimer.singleShot(1500, lambda: win.goto(page))
-        QTimer.singleShot(9000, lambda: (win.grab().save(shot), app.quit()))
+        QTimer.singleShot(9000, lambda: (win.grab().save(shot), settings.__setitem__("clean_exit", True),
+                                         settings.save(), app.quit()))
     sys.exit(app.exec())

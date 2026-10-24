@@ -170,12 +170,13 @@ class ProcessRunner(QObject):
         self.cwd = None
         self.python = None
 
-    def run(self, steps, cwd=None, python=None):
+    def run(self, steps, cwd=None, python=None, env=None):
         if self.running:
             self.output.emit("⚠ 이미 작업이 실행 중입니다. 끝난 뒤 다시 시도하세요.\n")
             return False
         self.queue = list(steps)
         self.cwd, self.python = cwd, python
+        self.extra_env = dict(env or {})
         self.running, self._cancel = True, False
         self._next()
         return True
@@ -205,6 +206,8 @@ class ProcessRunner(QObject):
         env = QProcessEnvironment()
         for k, v in toolchain.clean_env(self.python).items():
             env.insert(k, v)
+        for k, v in getattr(self, "extra_env", {}).items():
+            env.insert(k, str(v))
         p.setProcessEnvironment(env)
         if self.cwd:
             p.setWorkingDirectory(str(self.cwd))

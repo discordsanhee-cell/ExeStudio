@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, Q
                                QVBoxLayout, QWidget)
 
 from .. import codegen
+from ..config import AUTOSAVE_DIR
 from ..frameless import TitleBar
 from ..widgets import ColorButton, Page, PathPicker, button, label
 
@@ -363,6 +364,12 @@ class DesignerPage(Page):
         self.history = self.history[:self.hpos + 1] + [snap]
         self.history = self.history[-100:]
         self.hpos = len(self.history) - 1
+        if len(self.history) > 1:  # the empty start-up design isn't worth recovering
+            try:
+                AUTOSAVE_DIR.mkdir(parents=True, exist_ok=True)
+                (AUTOSAVE_DIR / "design.json").write_text(snap, encoding="utf-8")
+            except OSError:
+                pass
 
     def _restore(self):
         sel = self.canvas.selected.data["name"] if self.canvas.selected else None

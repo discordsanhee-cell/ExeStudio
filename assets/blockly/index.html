@@ -19,6 +19,13 @@
 <script>
 const G = python.pythonGenerator, O = python.Order;
 G.INDENT = "    ";
+// Python 3 accepts Korean identifiers, so keep "점수" readable instead of Blockly's "_EC_A0_90_EC_88_98".
+Blockly.Names.prototype.safeName = function (name) {
+  if (!name) return "unnamed";
+  let s = String(name).replace(/[^\p{L}\p{N}_]/gu, "_");
+  if (/^\p{N}/u.test(s)) s = "my_" + s;
+  return s;
+};
 G.INFINITE_LOOP_TRAP = "_tick()\n";
 const DARK = new URLSearchParams(location.search).get("dark") === "1";
 
@@ -170,8 +177,63 @@ Blockly.common.defineBlocksWithJsonArray([
   stmt({ type: "t_misc", message0: "🐢 %1", args0: [dd("A", [["거북이 숨기기", "hideturtle"], ["거북이 보이기", "showturtle"], ["처음 위치로", "home"], ["그림 지우기", "clear"]])], colour: C_TURTLE }),
   { type: "t_pos", message0: "🐢 거북이 %1 좌표", args0: [dd("AXIS", [["x", "x"], ["y", "y"]])], output: "Number", colour: C_TURTLE },
 ]);
+
+// ------------------------------------------------------------------ objects, sound, screen display
+const C_SPR = 260, C_SND = 330, C_SHOW = 20;
+let KNOWN_SPRITES = new Set();
+function spriteNames() {
+  const names = new Set(KNOWN_SPRITES);
+  for (const b of ws.getAllBlocks(false)) if (b.type === "spr_new") names.add(b.getFieldValue("NAME"));
+  return [...names].filter((n) => n);
+}
+function spriteMenu(withTargets) {
+  return function () {
+    const opts = spriteNames().map((n) => [n, n]);
+    const cur = this && this.getValue ? this.getValue() : null;
+    if (cur && !cur.startsWith("__") && !opts.some((o) => o[1] === cur)) opts.push([cur, cur]);
+    if (!opts.length) opts.push(["고양이", "고양이"]);
+    return withTargets ? opts.concat([["🧱 벽", "__wall__"], ["🖱 마우스 포인터", "__mouse__"]]) : opts;
+  };
+}
+const sfield = { type: "field_dropdown", name: "S", options: spriteMenu(false) };
+const SHAPES = [["🐱 고양이", "🐱"], ["🐶 강아지", "🐶"], ["🐰 토끼", "🐰"], ["🐻 곰", "🐻"], ["🐧 펭귄", "🐧"],
+  ["🚗 자동차", "🚗"], ["🚀 로켓", "🚀"], ["✈ 비행기", "✈️"], ["⭐ 별", "⭐"], ["🍎 사과", "🍎"], ["💎 보석", "💎"],
+  ["👾 외계인", "👾"], ["👻 유령", "👻"], ["⚽ 공", "⚽"], ["🧱 벽돌", "🧱"], ["❤ 하트", "❤️"], ["🔥 불", "🔥"], ["💣 폭탄", "💣"]];
+const NOTES = [["도", "262"], ["레", "294"], ["미", "330"], ["파", "349"], ["솔", "392"], ["라", "440"], ["시", "494"],
+  ["높은 도", "523"], ["높은 레", "587"], ["높은 미", "659"]];
+
+Blockly.common.defineBlocksWithJsonArray([
+  hatDef({ type: "ev_mouse", message0: "🖱 무대(화면)를 클릭했을 때" }),
+  hatDef({ type: "ev_sprite_click", message0: "🎮 %1 오브젝트를 클릭했을 때", args0: [sfield] }),
+  stmt({ type: "spr_new", message0: "🎮 오브젝트 %1 만들기  모양 %2", args0: [{ type: "field_input", name: "NAME", text: "고양이" }, dd("SHAPE", SHAPES)], colour: C_SPR, tooltip: "무대에 캐릭터를 만들어요 (가운데 0,0)" }),
+  stmt({ type: "spr_image", message0: "🎮 %1 모양을 그림 파일 %2 (으)로", args0: [sfield, any("PATH")], colour: C_SPR }),
+  stmt({ type: "spr_goto", message0: "🎮 %1 을(를) x %2 y %3 (으)로 옮기기", args0: [sfield, num("X"), num("Y")], colour: C_SPR }),
+  stmt({ type: "spr_move", message0: "🎮 %1 을(를) 보는 방향으로 %2 만큼 움직이기", args0: [sfield, num("N")], colour: C_SPR }),
+  stmt({ type: "spr_change", message0: "🎮 %1 의 %2 좌표를 %3 만큼 바꾸기", args0: [sfield, dd("AXIS", [["x", "x"], ["y", "y"]]), num("N")], colour: C_SPR }),
+  stmt({ type: "spr_set", message0: "🎮 %1 의 %2 을(를) %3 (으)로 정하기", args0: [sfield, dd("PROP", [["x 좌표", "x"], ["y 좌표", "y"], ["방향(도)", "heading"], ["크기(%)", "size"]]), num("V")], colour: C_SPR }),
+  stmt({ type: "spr_turn", message0: "🎮 %1 을(를) %2 도 회전하기", args0: [sfield, num("N")], colour: C_SPR }),
+  stmt({ type: "spr_show", message0: "🎮 %1 %2", args0: [sfield, dd("ON", [["보이기", "show"], ["숨기기", "hide"], ["맨 앞으로", "front"]])], colour: C_SPR }),
+  stmt({ type: "spr_say", message0: "💬 %1 이(가) %2 을(를) %3 초 동안 말하기", args0: [sfield, any("TEXT"), num("SEC")], colour: C_SPR, tooltip: "0초면 계속 보여줘요" }),
+  stmt({ type: "spr_bounce", message0: "🎮 %1 이(가) 벽에 닿으면 튕기기", args0: [sfield], colour: C_SPR }),
+  { type: "spr_touch", message0: "🎮 %1 이(가) %2 에 닿았나?", args0: [sfield, { type: "field_dropdown", name: "T", options: spriteMenu(true) }], output: "Boolean", colour: C_SPR },
+  { type: "spr_get", message0: "🎮 %1 의 %2", args0: [sfield, dd("PROP", [["x 좌표", "x"], ["y 좌표", "y"], ["방향", "heading"], ["크기", "size"]])], output: "Number", colour: C_SPR },
+  // sound
+  stmt({ type: "snd_sys", message0: "🔔 효과음 %1", args0: [dd("K", [["띵", "ok"], ["알림", "info"], ["경고", "warn"], ["오류", "error"], ["질문", "question"]])], colour: C_SND }),
+  stmt({ type: "snd_play", message0: "🎵 소리 파일 %1 %2", args0: [any("PATH"), dd("WAIT", [["재생하기", "no"], ["재생하고 기다리기", "yes"]])], colour: C_SND, tooltip: "mp3, wav 파일" }),
+  stmt({ type: "snd_stop", message0: "🔇 모든 소리 끄기", colour: C_SND }),
+  stmt({ type: "snd_vol", message0: "🔊 음량을 %1 % 로 정하기", args0: [num("V")], colour: C_SND }),
+  stmt({ type: "snd_note", message0: "🎹 %1 음을 %2 초 연주하기", args0: [dd("HZ", NOTES), num("SEC")], colour: C_SND }),
+  stmt({ type: "snd_tone", message0: "🎹 %1 Hz 소리를 %2 초 내기", args0: [num("HZ"), num("SEC")], colour: C_SND }),
+  stmt({ type: "snd_speak", message0: "🗣 %1 말하기 (목소리)", args0: [any("TEXT")], colour: C_SND, tooltip: "윈도우 음성으로 읽어줘요" }),
+  // screen display & mouse
+  stmt({ type: "var_show", message0: "📊 변수 %1 화면에 보이기", args0: [{ type: "field_variable", name: "VAR", variable: "점수" }], colour: C_SHOW }),
+  stmt({ type: "var_hide", message0: "📊 변수 %1 화면에서 숨기기", args0: [{ type: "field_variable", name: "VAR", variable: "점수" }], colour: C_SHOW }),
+  { type: "mouse_pos", message0: "🖱 마우스 %1 좌표", args0: [dd("AXIS", [["x", "x"], ["y", "y"]])], output: "Number", colour: C_SHOW },
+  { type: "mouse_down", message0: "🖱 마우스를 누르고 있나?", output: "Boolean", colour: C_SHOW },
+]);
+
 // event blocks get the round "hat" top
-for (const t of ["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg"]) {
+for (const t of ["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click"]) {
   const orig = Blockly.Blocks[t].init;
   Blockly.Blocks[t].init = function () { orig.call(this); this.hat = "cap"; };
 }
@@ -180,7 +242,9 @@ try { Blockly.libraryBlocks.loops.loopTypes.add("ctrl_forever"); } catch (e) {}
 // ------------------------------------------------------------------ code generators
 const F = G.forBlock;
 const call = (code) => [code, O.FUNCTION_CALL];
-const HATS = new Set(["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg"]);
+const HATS = new Set(["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click"]);
+// statement ids for the running-block highlight go through q() too, ids can come from shared files
+G.injectId = (msg, block) => msg.replace(/%1/g, q(block.id));
 let hatCount = 0;
 function hat(b, deco) {
   hatCount++;
@@ -201,6 +265,37 @@ F.ev_click = (b) => hat(b, `@_on('click', ${q(b.getFieldValue("W"))})`);
 F.ev_change = (b) => hat(b, `@_on('change', ${q(b.getFieldValue("W"))})`);
 F.ev_every = (b) => hat(b, `@_on('every', ${Number(b.getFieldValue("SEC")) || 1})`);
 F.ev_msg = (b) => hat(b, `@_on('msg', ${q(b.getFieldValue("MSG"))})`);
+F.ev_mouse = (b) => hat(b, "@_on('mouse')");
+F.ev_sprite_click = (b) => hat(b, `@_on('sprite_click', ${q(b.getFieldValue("S"))})`);
+const S = (b) => q(b.getFieldValue("S"));
+F.spr_new = (b) => `_spr_new(${q(b.getFieldValue("NAME"))}, ${q(b.getFieldValue("SHAPE"))})\n`;
+F.spr_image = (b) => `_spr_image(${S(b)}, ${val(b, "PATH", "''")})\n`;
+F.spr_goto = (b) => `_spr_goto(${S(b)}, ${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`;
+F.spr_move = (b) => `_spr_move(${S(b)}, ${val(b, "N", "10")})\n`;
+F.spr_change = (b) => `_spr_change(${S(b)}, ${q(pick(b, "AXIS", ["x", "y"]))}, ${val(b, "N", "10")})\n`;
+F.spr_set = (b) => `_spr_set(${S(b)}, ${q(pick(b, "PROP", ["x", "y", "heading", "size"]))}, ${val(b, "V", "0")})\n`;
+F.spr_turn = (b) => `_spr_turn(${S(b)}, ${val(b, "N", "15")})\n`;
+F.spr_show = (b) => {
+  const on = pick(b, "ON", ["show", "hide", "front"]);
+  return on === "front" ? `_spr_front(${S(b)})\n` : `_spr_show(${S(b)}, ${on === "show" ? "True" : "False"})\n`;
+};
+F.spr_say = (b) => `_spr_say(${S(b)}, ${val(b, "TEXT", "''")}, ${val(b, "SEC", "2")})\n`;
+F.spr_bounce = (b) => `_spr_bounce(${S(b)})\n`;
+F.spr_touch = (b) => call(`_spr_touch(${S(b)}, ${q(b.getFieldValue("T"))})`);
+F.spr_get = (b) => call(`_spr_get(${S(b)}, ${q(pick(b, "PROP", ["x", "y", "heading", "size"]))})`);
+F.snd_sys = (b) => `_snd_sys(${q(pick(b, "K", ["ok", "info", "warn", "error", "question"]))})\n`;
+F.snd_play = (b) => `_snd_play(${val(b, "PATH", "''")}, ${b.getFieldValue("WAIT") === "yes" ? "True" : "False"})\n`;
+F.snd_stop = () => "_snd_stop()\n";
+F.snd_vol = (b) => `_snd_volume(${val(b, "V", "100")})\n`;
+F.snd_note = (b) => `_tone(${Number(b.getFieldValue("HZ")) || 440}, ${val(b, "SEC", "0.3")})\n`;
+F.snd_tone = (b) => `_tone(${val(b, "HZ", "440")}, ${val(b, "SEC", "0.3")})\n`;
+F.snd_speak = (b) => `_speak(${val(b, "TEXT", "''")})\n`;
+const varName = (b) => G.getVariableName(b.getFieldValue("VAR"));
+const varLabel = (b) => { const v = b.getField("VAR").getVariable(); return q(v ? v.name : "변수"); };
+F.var_show = (b) => `_watch(${varLabel(b)}, lambda: ${varName(b)})\n`;
+F.var_hide = (b) => `_unwatch(${varLabel(b)})\n`;
+F.mouse_pos = (b) => call(`_mouse(${q(pick(b, "AXIS", ["x", "y"]))})`);
+F.mouse_down = () => call("_mouse('down')");
 F.msg_send = (b) => `_broadcast(${q(b.getFieldValue("MSG"))})\n`;
 F.key_down = (b) => call(`_key_down(${q(b.getFieldValue("KEY"))})`);
 
@@ -279,6 +374,7 @@ const toolbox = { kind: "categoryToolbox", contents: [
   cat("🚩 시작·이벤트", C_EV, [
     label("이 블록 아래에 붙인 블록만 실행돼요"),
     blk("ev_start"), blk("ev_click"), blk("ev_key"), blk("ev_change"), blk("ev_every"), blk("ev_msg"),
+    blk("ev_mouse"), blk("ev_sprite_click"),
     blk("msg_send"), blk("key_down"),
   ]),
   cat("🧱 화면 요소", C_W, [
@@ -287,6 +383,21 @@ const toolbox = { kind: "categoryToolbox", contents: [
     blk("w_set_value", { V: N(50) }), blk("w_add_value", { V: N(10) }), blk("w_get_value"), blk("w_checked"),
     blk("w_vis"), blk("w_color"), blk("w_move", { X: N(20), Y: N(20) }),
     blk("w_list_add", { V: T("새 항목") }), blk("w_list_clear"), blk("win_title", { V: T("새 제목") }),
+  ]),
+  cat("🎮 오브젝트", C_SPR, [
+    label("무대에 캐릭터를 올려 게임을 만들어요 (가운데가 x 0, y 0)"),
+    blk("spr_new"), blk("spr_goto", { X: N(0), Y: N(0) }), blk("spr_move", { N: N(10) }),
+    blk("spr_change", { N: N(10) }), blk("spr_set", { V: N(100) }), blk("spr_turn", { N: N(15) }), blk("spr_show"),
+    blk("spr_say", { TEXT: T("안녕!"), SEC: N(2) }), blk("spr_bounce"), blk("spr_touch"), blk("spr_get"),
+    blk("spr_image", { PATH: T("C:\\그림\\캐릭터.png") }),
+  ]),
+  cat("🔊 소리", C_SND, [
+    blk("snd_sys"), blk("snd_note", { SEC: N(0.3) }), blk("snd_tone", { HZ: N(440), SEC: N(0.3) }),
+    blk("snd_speak", { TEXT: T("안녕하세요") }),
+    blk("snd_play", { PATH: T("C:\\Windows\\Media\\tada.wav") }), blk("snd_stop"), blk("snd_vol", { V: N(80) }),
+  ]),
+  cat("📊 변수 보이기·마우스", C_SHOW, [
+    blk("var_show"), blk("var_hide"), blk("mouse_pos"), blk("mouse_down"),
   ]),
   cat("🪟 창·대화상자", C_UI, [
     label("질문 아래에 빈 칸('비어 있나?', 비교 등)을 놓으면 '대답'이 자동으로 들어가요"),
@@ -410,8 +521,9 @@ ws.addChangeListener((e) => {
 // ------------------------------------------------------------------ API used from Python
 let changeCount = 0;
 ws.addChangeListener((e) => { if (!e.isUiEvent) changeCount++; });
-function getCode() {
+function getCode(trace) {
   hatCount = 0;
+  G.STATEMENT_PREFIX = trace ? "_hl(%1)\n" : null;
   G.init(ws);
   const parts = [];
   let loose = 0;
@@ -426,9 +538,16 @@ function getCode() {
     }
   }
   const code = G.finish(parts.join("\n")).replace(/\n{3,}/g, "\n\n");
+  G.STATEMENT_PREFIX = null;
   return { code, loose };
 }
-function getState() { const r = getCode(); return JSON.stringify({ n: changeCount, code: r.code, loose: r.loose }); }
+function getState(trace) {
+  const r = getCode(!!trace);
+  return JSON.stringify({ n: changeCount, code: r.code, loose: r.loose });
+}
+function highlight(id) {
+  try { ws.highlightBlock(id || null); } catch (e) {}
+}
 function saveWs() { return JSON.stringify(Blockly.serialization.workspaces.save(ws)); }
 function rememberWidgetNames(obj) {
   // keep widget names used by loaded blocks valid even if the designer no longer has them
@@ -446,8 +565,23 @@ function fitView() {
   if (ws.getScale() > 0.9) ws.setScale(0.9);
   ws.scrollCenter();
 }
+function rememberSprites(obj) {
+  KNOWN_SPRITES = new Set();
+  const walk = (o) => {
+    if (!o || typeof o !== "object") return;
+    if (o.fields) {
+      if (o.type === "spr_new" && typeof o.fields.NAME === "string") KNOWN_SPRITES.add(o.fields.NAME);
+      for (const k of ["S", "T"]) {
+        if (typeof o.fields[k] === "string" && !o.fields[k].startsWith("__")) KNOWN_SPRITES.add(o.fields[k]);
+      }
+    }
+    for (const k in o) walk(o[k]);
+  };
+  walk(obj);
+}
 function loadWs(obj) {
   rememberWidgetNames(obj);
+  rememberSprites(obj);
   ws.clear();
   Blockly.serialization.workspaces.load(obj, ws);
   setTimeout(fitView, 60);
@@ -477,7 +611,47 @@ const alert = (input) => ({ type: "ui_alert", inputs: { TEXT: input } });
 const onStart = (x, y, list) => ({ type: "ev_start", x, y, next: { block: chain(list) } });
 const onKey = (key, x, y, list) => ({ type: "ev_key", fields: { KEY: key }, x, y, next: { block: chain(list) } });
 
+const spr = (type, s, extra) => Object.assign({ type, fields: Object.assign({ S: s }, (extra || {}).fields || {}) },
+  { inputs: (extra || {}).inputs || {} });
+const rnd = (a, b) => ({ block: { type: "math_random_int", inputs: { FROM: nm(a), TO: nm(b) } } });
+
 const EXAMPLES = {
+  "🎮 별 받기 게임": {
+    variables: [{ name: "점수", id: "v_score" }],
+    blocks: { languageVersion: 0, blocks: [
+      onStart(40, 30, [
+        { type: "spr_new", fields: { NAME: "고양이", SHAPE: "🐱" } },
+        spr("spr_goto", "고양이", { inputs: { X: nm(0), Y: nm(-230) } }),
+        { type: "spr_new", fields: { NAME: "별", SHAPE: "⭐" } },
+        spr("spr_goto", "별", { inputs: { X: rnd(-250, 250), Y: nm(260) } }),
+        { type: "variables_set", fields: { VAR: { id: "v_score" } }, inputs: { VALUE: nm(0) } },
+        { type: "var_show", fields: { VAR: { id: "v_score" } } },
+        spr("spr_say", "고양이", { inputs: { TEXT: tx("← → 키로 별을 받아요!"), SEC: nm(2) } }),
+      ]),
+      { type: "ev_every", x: 560, y: 30, fields: { SEC: 0.03 }, next: { block: chain([
+        spr("spr_change", "별", { fields: { AXIS: "y" }, inputs: { N: nm(-7) } }),
+        { type: "controls_if", inputs: {
+          IF0: { block: { type: "spr_touch", fields: { S: "별", T: "고양이" } } },
+          DO0: { block: chain([
+            { type: "math_change", fields: { VAR: { id: "v_score" } }, inputs: { DELTA: nm(1) } },
+            { type: "snd_sys", fields: { K: "ok" } },
+            spr("spr_goto", "별", { inputs: { X: rnd(-250, 250), Y: nm(260) } }),
+          ]) },
+        } },
+        { type: "controls_if", inputs: {
+          IF0: { block: { type: "logic_compare", fields: { OP: "LT" }, inputs: {
+            A: { block: { type: "spr_get", fields: { S: "별", PROP: "y" } } }, B: nm(-280) } } },
+          DO0: { block: spr("spr_goto", "별", { inputs: { X: rnd(-250, 250), Y: nm(260) } }) },
+        } },
+      ]) } },
+      onKey("left", 40, 460, [spr("spr_change", "고양이", { fields: { AXIS: "x" }, inputs: { N: nm(-25) } })]),
+      onKey("right", 40, 580, [spr("spr_change", "고양이", { fields: { AXIS: "x" }, inputs: { N: nm(25) } })]),
+      { type: "ev_sprite_click", x: 560, y: 520, fields: { S: "고양이" }, next: { block: chain([
+        spr("spr_say", "고양이", { inputs: { TEXT: tx("야옹!"), SEC: nm(1) } }),
+        { type: "snd_speak", inputs: { TEXT: tx("야옹") } },
+      ]) } },
+    ] },
+  },
   "👋 인사 프로그램": {
     blocks: { languageVersion: 0, blocks: [onStart(40, 40, [
       { type: "ui_ask", inputs: { TEXT: tx("이름이 뭐예요?") } },

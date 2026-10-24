@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QComboBox, QFileDialog, QHBoxLayout, QLineEdit, Q
                                QWidget)
 
 from .. import codegen, toolchain
-from ..config import BUNDLED_PYTHON, DATA_DIR, resource_dir
+from ..config import AUTOSAVE_DIR, BUNDLED_PYTHON, DATA_DIR, resource_dir
 from ..widgets import LogConsole, Page, ProcessRunner, button, label
 from .editor import CodeEditor
 
@@ -16,7 +16,7 @@ try:
 except ImportError:  # QtWebEngine missing: page shows a message instead
     QWebEngineView = None
 
-JS_EXAMPLES = ["👋 인사 프로그램", "🎯 숫자 맞히기 게임", "🌟 거북이 별 그리기", "🏃 방향키로 거북이 조종", "🖱 자동 클릭 매크로"]
+JS_EXAMPLES = ["🎮 별 받기 게임", "👋 인사 프로그램", "🎯 숫자 맞히기 게임", "🌟 거북이 별 그리기", "🏃 방향키로 거북이 조종", "🖱 자동 클릭 매크로"]
 COUNTER_EXAMPLE = "🔘 클릭 카운터 (GUI 디자이너 연동)"
 
 
@@ -107,19 +107,21 @@ class BlocksPage(Page):
         self.examples.addItem("📚 예제 불러오기…")
         self.examples.addItems([COUNTER_EXAMPLE] + JS_EXAMPLES)
         self.examples.activated.connect(self._example)
+        self.examples.setMinimumWidth(170)
         bar.addWidget(self.examples)
         bar.addSpacing(10)
         bar.addWidget(button("▶ 실행", self.run, accent=True))
         bar.addWidget(button("■ 중지", self.runner.kill))
-        bar.addWidget(button("🎨 GUI 디자이너", lambda: self.ctx.main.goto("designer"), tip="화면(버튼·라벨) 만들러 가기"))
-        bar.addWidget(button("💻 전체 코드", self.to_editor, tip="완성된 프로그램 코드를 에디터에서 보기"))
+        bar.addWidget(button("🎨 화면", lambda: self.ctx.main.goto("designer"), tip="GUI 디자이너에서 화면(버튼·라벨) 만들기"))
+        bar.addWidget(button("💻 코드", self.to_editor, tip="완성된 프로그램 코드를 에디터에서 보기"))
         bar.addStretch(1)
         self.name = QLineEdit("블록프로그램")
-        self.name.setFixedWidth(150)
+        self.name.setFixedWidth(130)
         self.name.setToolTip("만들 EXE 이름")
         bar.addWidget(label("이름", "Sub"))
         bar.addWidget(self.name)
         bar.addWidget(button("🔨 EXE 만들기", self.build_exe, accent=True))
+        bar.addWidget(button("💿 설치파일", self.build_setup, tip="EXE를 만든 뒤 Setup.exe 설치 프로그램까지 한 번에"))
         self.root.addLayout(bar)
 
         split = QSplitter(Qt.Orientation.Horizontal)
@@ -147,12 +149,41 @@ class BlocksPage(Page):
         split.setSizes([900, 380])
         split.setStretchFactor(0, 1)
 
-        self.runner.output.connect(self.log.append_text)
-        self.runner.finished.connect(lambda c: self.log.append_text("\n✔ 프로그램 종료\n" if c == 0 else ""))
+        self._out_buf = ""
+        self.runner.output.connect(self._program_output)
+        self.runner.finished.connect(self._program_finished)
         self.poll = QTimer(self)
         self.poll.setInterval(700)
         self.poll.timeout.connect(self._poll)
         self._loaded_once = False
+
+    # ---- running-block highlight ------------------------------------------
+    def _program_output(self, text):
+        """Program output, minus the '\\x1eHL:<id>' lines the runtime prints to say which block is running."""
+        *lines, rest = (self._out_buf + text).split("\n")
+        shown, last_id = [], None
+        for ln in lines:
+            if ln.startswith("\x1eHL:"):
+                last_id = ln[4:].strip()
+            else:
+                shown.append(ln + "\n")
+        if rest.startswith("\x1e"):  # maybe an unfinished highlight line: wait for the rest of it
+            self._out_buf = rest
+        else:
+            shown.append(rest)
+            self._out_buf = ""
+        if shown:
+            self.log.append_text("".join(shown))
+        if last_id and self.ready:
+            self.view.page().runJavaScript(f"highlight({json.dumps(last_id)})")
+
+    def _program_finished(self, code):
+        if self._out_buf and not self._out_buf.startswith("\x1eHL:"):
+            self.log.append_text(self._out_buf)
+        self._out_buf = ""
+        if self.ready:
+            self.view.page().runJavaScript("highlight(null)")
+        self.log.append_text("\n✔ 프로그램 종료\n" if code == 0 else "")
 
     # ---- web view plumbing ----------------------------------------------
     def ensure_loaded(self):
@@ -241,6 +272,8 @@ class BlocksPage(Page):
         state = json.loads(result)
         if state["n"] == self._last_n and self.logic:
             return
+        if self._last_n != -1:
+            self.autosave()
         self._last_n = state["n"]
         self.logic = state["code"]
         self.loose = state.get("loose", 0)
@@ -256,7 +289,8 @@ class BlocksPage(Page):
         return codegen.block_program(self.design(), self.ctx.design_titlebar(), logic,
                                      self.name.text().strip() or "블록프로그램")
 
-    def _with_program(self, then):
+    def _with_program(self, then, trace=False):
+        """trace=True adds the running-block highlight calls (only for running inside EXE Studio)."""
         if self.view is None:
             return
 
@@ -268,7 +302,7 @@ class BlocksPage(Page):
                 return
             then(self.full_program(state["code"]))
 
-        self._js("getState()", got)
+        self._js("getState(true)" if trace else "getState()", got)
 
     # ---- workspace files ------------------------------------------------
     def new_ws(self):
@@ -343,7 +377,7 @@ class BlocksPage(Page):
 
     # ---- run / export ---------------------------------------------------
     def run(self):
-        self._with_program(self._run_code)
+        self._with_program(self._run_code, trace=True)
 
     def _python(self):
         """Block programs need PySide6: the bundled runtime always has it, so prefer that."""
@@ -365,8 +399,9 @@ class BlocksPage(Page):
             self.log.append_text(f"📦 필요한 패키지 설치: {', '.join(missing)}\n")
             steps.append([py, "-m", "pip", "install", *toolchain.pip_names(missing)])
         steps.append([py, "-u", str(script)])
-        self.log.append_text("▶ 실행 중… (창을 닫으면 끝나요)\n")
-        self.runner.run(steps, cwd=str(folder), python=py)
+        self.log.append_text("▶ 실행 중… 지금 실행되는 블록이 노랗게 표시돼요 (창을 닫으면 끝나요)\n")
+        self._out_buf = ""
+        self.runner.run(steps, cwd=str(folder), python=py, env={"ESD_TRACE": "1"})
 
     def to_editor(self):
         self._with_program(lambda code: (self.ctx.main.page("editor").new_file(code), self.ctx.main.goto("editor")))
@@ -374,7 +409,10 @@ class BlocksPage(Page):
     def build_exe(self):
         self._with_program(self._build)
 
-    def _build(self, code):
+    def build_setup(self):
+        self._with_program(lambda code: self._build(code, setup=True))
+
+    def _build(self, code, setup=False):
         name = "".join(ch for ch in self.name.text() if ch.isalnum() or ch in "-_ ").strip() or "블록프로그램"
         folder = Path(self.ctx.settings["projects_dir"]) / name
         folder.mkdir(parents=True, exist_ok=True)
@@ -387,4 +425,29 @@ class BlocksPage(Page):
         build = self.ctx.main.page("build")
         build.set_script(str(script), name=name, console=False)
         self.ctx.main.goto("build")
+        if setup:
+            installer = self.ctx.main.page("installer")
+            build.after_success = lambda exe: (self.ctx.main.goto("installer"), installer.make_setup())
+            self.toast("EXE를 만든 뒤 바로 설치파일(Setup.exe)을 만들어요")
         build.start_build(python=self._python())
+
+    # ---- auto save / recovery ---------------------------------------------
+    def autosave(self):
+        """Keeps the latest blocks next to the designer's autosave so a crash doesn't lose work."""
+        if not self.ready:
+            return
+
+        def write(data):
+            try:
+                AUTOSAVE_DIR.mkdir(parents=True, exist_ok=True)
+                (AUTOSAVE_DIR / "blocks.json").write_text(json.dumps(
+                    {"name": self.name.text(), "blocks": json.loads(data)}, ensure_ascii=False), encoding="utf-8")
+            except (OSError, ValueError):
+                pass
+
+        self.view.page().runJavaScript("saveWs()", 0, write)
+
+    def restore_autosave(self, data):
+        self.name.setText(data.get("name") or "블록프로그램")
+        self._sync_widgets(force=True)
+        self._js(f"loadWs({json.dumps(data.get('blocks', {}), ensure_ascii=False)})")

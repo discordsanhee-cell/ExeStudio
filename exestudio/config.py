@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "EXE Studio"
-APP_VERSION = "1.1.1"
+APP_VERSION = "1.2.0"
 FROZEN = getattr(sys, "frozen", False)
 
 
@@ -28,6 +28,7 @@ SETTINGS_FILE = DATA_DIR / "settings.json"
 BUNDLED_PYTHON = install_dir() / "runtime" / "python.exe"
 MANAGED_PYTHON_DIR = DATA_DIR / "python"
 DOWNLOAD_DIR = DATA_DIR / "downloads"
+AUTOSAVE_DIR = DATA_DIR / "autosave"
 DEFAULT_PROJECTS_DIR = Path.home() / "Documents" / "ExeStudio Projects"
 
 DEFAULTS = {
@@ -45,6 +46,7 @@ DEFAULTS = {
     "auto_update": True,
     "update_source": "",
     "skip_version": "",
+    "clean_exit": True,
 }
 
 

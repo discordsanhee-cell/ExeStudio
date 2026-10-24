@@ -5,7 +5,7 @@ import shlex
 import time
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QCheckBox, QComboBox, QFileDialog, QFormLayout, QGridLayout, QHBoxLayout, QLineEdit,
                                QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit, QProgressBar, QSplitter,
                                QVBoxLayout, QWidget)
@@ -62,6 +62,7 @@ class BuildPage(Page):
         self.runner = ProcessRunner(self)
         self.last_output = None
         self.started_at = 0
+        self.after_success = None  # one-shot follow-up, e.g. making a Setup.exe right after the build
 
         split = QSplitter(Qt.Orientation.Horizontal)
         self.root.addWidget(split, 1)
@@ -458,6 +459,10 @@ class BuildPage(Page):
     def _finished(self, code):
         elapsed = time.time() - self.started_at
         exe = self.expected_output()
+        follow_up, self.after_success = self.after_success, None
+        if code == 0 and exe.exists() and follow_up is not None:
+            self.opt_open.setChecked(False)
+            QTimer.singleShot(0, lambda: follow_up(exe))
         if code == 0 and exe.exists():
             self.last_output = exe
             size = exe.stat().st_size if self.mode.currentData() == "onefile" else folder_size(exe.parent)

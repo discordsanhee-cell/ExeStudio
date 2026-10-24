@@ -171,7 +171,22 @@ class InstallerPage(Page):
         self._out = out
         self.runner.run([[iscc, str(iss)]], cwd=str(out))
 
+    def make_setup(self):
+        """One click from the block page: fresh script for the EXE that was just built, then compile it."""
+        if not toolchain.find_iscc():
+            if QMessageBox.question(self, "Inno Setup 필요", "설치파일을 만들려면 Inno Setup이 필요해요.\n지금 설치할까요?") \
+                    == QMessageBox.StandardButton.Yes:
+                self._after_install = self.make_setup
+                self.install_inno()
+            return
+        if self.generate() is not None:
+            self.compile()
+
     def _done(self, code):
+        after, self._after_install = getattr(self, "_after_install", None), None
+        if after and code == 0 and toolchain.find_iscc():
+            after()
+            return
         if code == 0 and getattr(self, "_out", None):
             self.toast("Setup.exe 완성 🎉")
             reveal(self._out)
