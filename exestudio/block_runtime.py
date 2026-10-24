@@ -1038,6 +1038,126 @@ def _speak(text):
                        stderr=subprocess.DEVNULL)
 
 
+# ---------------------------------------------------------------- internet
+def _net_get(url, timeout=15, agent="Mozilla/5.0 (EXE Studio program)"):
+    import urllib.request
+    url = str(url).strip()
+    if not url.lower().startswith(("http://", "https://")):
+        url = "https://" + url
+    req = urllib.request.Request(url, headers={"User-Agent": agent, "Accept-Language": "ko"})
+    with _released():
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            data = r.read(5 * 1024 * 1024)
+            enc = r.headers.get_content_charset() or "utf-8"
+    return data.decode(enc, "replace")
+
+
+def _net_text(url):
+    """Web page as plain text (tags removed)."""
+    import html
+    import re as _re
+    raw = _net_get(url)
+    raw = _re.sub(r"(?is)<(script|style).*?</\1>", " ", raw)
+    text = html.unescape(_re.sub(r"(?s)<[^>]+>", " ", raw))
+    return _re.sub(r"\s+", " ", text).strip()
+
+
+_WEATHER_KO = [("thunder", "천둥번개"), ("blizzard", "눈보라"), ("heavy snow", "폭설"), ("snow", "눈"),
+               ("sleet", "진눈깨비"), ("freezing", "어는 비"), ("heavy rain", "폭우"), ("torrential", "폭우"),
+               ("drizzle", "이슬비"), ("shower", "소나기"), ("rain", "비"), ("fog", "안개"), ("mist", "옅은 안개"),
+               ("haze", "실안개"), ("overcast", "흐림"), ("partly cloudy", "구름 조금"), ("cloudy", "구름 많음"),
+               ("sunny", "맑음"), ("clear", "맑음")]
+
+
+def _weather(city):
+    import urllib.parse
+    try:
+        # wttr.in answers browsers with an HTML page and command-line tools with plain text
+        text = _net_get(f"https://wttr.in/{urllib.parse.quote(str(city))}?format=%t+%C",
+                        agent="curl/8.0").strip()
+    except Exception:
+        return "날씨를 가져올 수 없어요"
+    temp, _, cond = text.partition(" ")
+    low = cond.lower()
+    for en, ko in _WEATHER_KO:
+        if en in low:
+            return f"{temp} {ko}"
+    return text
+
+
+def _online():
+    try:
+        _net_get("https://www.google.com/generate_204", timeout=5)
+        return True
+    except Exception:
+        return False
+
+
+# ---------------------------------------------------------------- saved data (survives restarts)
+def _data_file():
+    safe = "".join(ch for ch in _TITLE if ch.isalnum() or ch in "-_ ").strip() or "BlockProgram"
+    base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    return os.path.join(base, "ExeStudioPrograms", safe, "data.json")
+
+
+_DATA_LOCK = threading.Lock()
+
+
+def _data_all():
+    import json
+    try:
+        with open(_data_file(), encoding="utf-8") as f:
+            d = json.load(f)
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _data_save(key, value):
+    import json
+    with _DATA_LOCK:
+        d = _data_all()
+        d[str(key)] = value if isinstance(value, (int, float, str, bool, list)) else str(value)
+        path = _data_file()
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path + ".tmp", "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.replace(path + ".tmp", path)
+
+
+def _data_load(key, default=0):
+    with _DATA_LOCK:
+        return _data_all().get(str(key), default)
+
+
+def _data_delete(key):
+    import json
+    with _DATA_LOCK:
+        d = _data_all()
+        d.pop(str(key), None)
+        path = _data_file()
+        if os.path.exists(path):
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(d, f, ensure_ascii=False)
+
+
+# ---------------------------------------------------------------- timer
+_TIMER = {"start": time.monotonic(), "paused": None}
+
+
+def _timer(action="value"):
+    now = time.monotonic()
+    if action == "reset":
+        _TIMER["start"], _TIMER["paused"] = now, None
+    elif action == "stop" and _TIMER["paused"] is None:
+        _TIMER["paused"] = now
+    elif action == "start" and _TIMER["paused"] is not None:
+        _TIMER["start"] += now - _TIMER["paused"]
+        _TIMER["paused"] = None
+    end = _TIMER["paused"] if _TIMER["paused"] is not None else now
+    return round(end - _TIMER["start"], 1)
+
+
 # ---------------------------------------------------------------- running-block highlight (EXE Studio only)
 _TRACE = {"on": bool(os.environ.get("ESD_TRACE")), "last": 0.0, "cur": None}
 

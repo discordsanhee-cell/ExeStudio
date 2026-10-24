@@ -16,7 +16,7 @@ try:
 except ImportError:  # QtWebEngine missing: page shows a message instead
     QWebEngineView = None
 
-JS_EXAMPLES = ["🎮 별 받기 게임", "👋 인사 프로그램", "🎯 숫자 맞히기 게임", "🌟 거북이 별 그리기", "🏃 방향키로 거북이 조종", "🖱 자동 클릭 매크로"]
+JS_EXAMPLES = ["⏱ 반응속도 게임 (최고기록 저장)", "🌤 오늘 날씨 알려주기", "🎮 별 받기 게임", "👋 인사 프로그램", "🎯 숫자 맞히기 게임", "🌟 거북이 별 그리기", "🏃 방향키로 거북이 조종", "🖱 자동 클릭 매크로"]
 COUNTER_EXAMPLE = "🔘 클릭 카운터 (GUI 디자이너 연동)"
 
 

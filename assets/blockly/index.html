@@ -230,6 +230,19 @@ Blockly.common.defineBlocksWithJsonArray([
   stmt({ type: "var_hide", message0: "📊 변수 %1 화면에서 숨기기", args0: [{ type: "field_variable", name: "VAR", variable: "점수" }], colour: C_SHOW }),
   { type: "mouse_pos", message0: "🖱 마우스 %1 좌표", args0: [dd("AXIS", [["x", "x"], ["y", "y"]])], output: "Number", colour: C_SHOW },
   { type: "mouse_down", message0: "🖱 마우스를 누르고 있나?", output: "Boolean", colour: C_SHOW },
+  // internet
+  { type: "net_text", message0: "🌐 웹페이지 %1 의 글자", args0: [any("URL")], output: "String", colour: 185, inputsInline: true },
+  { type: "net_raw", message0: "🌐 주소 %1 의 내용 그대로", args0: [any("URL")], output: "String", colour: 185, inputsInline: true, tooltip: "API 응답 등 원본 그대로" },
+  { type: "net_weather", message0: "🌤 %1 의 지금 날씨", args0: [any("CITY")], output: "String", colour: 185, inputsInline: true },
+  { type: "net_online", message0: "🌐 인터넷에 연결돼 있나?", output: "Boolean", colour: 185 },
+  // saved data
+  stmt({ type: "data_save", message0: "💾 %1 (으)로 %2 저장하기", args0: [any("KEY"), any("V")], colour: 95, tooltip: "프로그램을 껐다 켜도 남아요" }),
+  { type: "data_load", message0: "💾 저장된 %1 (없으면 %2 )", args0: [any("KEY"), any("DEF")], output: null, colour: 95, inputsInline: true },
+  stmt({ type: "data_delete", message0: "💾 저장된 %1 지우기", args0: [any("KEY")], colour: 95 }),
+  // timer
+  stmt({ type: "timer_do", message0: "⏱ 타이머 %1", args0: [dd("A", [["처음부터 다시", "reset"], ["멈추기", "stop"], ["다시 가게", "start"]])], colour: C_TIME }),
+  { type: "timer_value", message0: "⏱ 타이머 값(초)", output: "Number", colour: C_TIME },
+  stmt({ type: "timer_show", message0: "⏱ 타이머 화면에 %1", args0: [dd("ON", [["보이기", "show"], ["숨기기", "hide"]])], colour: C_TIME }),
 ]);
 
 // event blocks get the round "hat" top
@@ -296,6 +309,17 @@ F.var_show = (b) => `_watch(${varLabel(b)}, lambda: ${varName(b)})\n`;
 F.var_hide = (b) => `_unwatch(${varLabel(b)})\n`;
 F.mouse_pos = (b) => call(`_mouse(${q(pick(b, "AXIS", ["x", "y"]))})`);
 F.mouse_down = () => call("_mouse('down')");
+F.net_text = (b) => call(`_net_text(${val(b, "URL", "''")})`);
+F.net_raw = (b) => call(`_net_get(${val(b, "URL", "''")})`);
+F.net_weather = (b) => call(`_weather(${val(b, "CITY", "'Seoul'")})`);
+F.net_online = () => call("_online()");
+F.data_save = (b) => `_data_save(${val(b, "KEY", "'값'")}, ${val(b, "V", "0")})\n`;
+F.data_load = (b) => call(`_data_load(${val(b, "KEY", "'값'")}, ${val(b, "DEF", "0")})`);
+F.data_delete = (b) => `_data_delete(${val(b, "KEY", "'값'")})\n`;
+F.timer_do = (b) => `_timer(${q(pick(b, "A", ["reset", "stop", "start"]))})\n`;
+F.timer_value = () => call("_timer()");
+F.timer_show = (b) => pick(b, "ON", ["show", "hide"]) === "show"
+  ? "_watch('⏱ 타이머', lambda: _timer())\n" : "_unwatch('⏱ 타이머')\n";
 F.msg_send = (b) => `_broadcast(${q(b.getFieldValue("MSG"))})\n`;
 F.key_down = (b) => call(`_key_down(${q(b.getFieldValue("KEY"))})`);
 
@@ -416,7 +440,17 @@ const toolbox = { kind: "categoryToolbox", contents: [
     blk("controls_if"), { kind: "block", type: "controls_if", extraState: { hasElse: true } },
     blk("logic_compare"), blk("logic_operation"), blk("logic_negate"), blk("logic_boolean"), blk("logic_ternary"),
   ]),
-  cat("⏱ 시간", C_TIME, [blk("time_sleep", { SEC: N(1) }), blk("time_now"), blk("time_today")]),
+  cat("⏱ 시간·타이머", C_TIME, [blk("time_sleep", { SEC: N(1) }), blk("time_now"), blk("time_today"),
+    blk("timer_do"), blk("timer_value"), blk("timer_show")]),
+  cat("💾 데이터 저장", 95, [
+    label("저장한 값은 프로그램을 껐다 켜도 남아요"),
+    blk("data_save", { KEY: T("최고점수"), V: N(0) }), blk("data_load", { KEY: T("최고점수"), DEF: N(0) }),
+    blk("data_delete", { KEY: T("최고점수") }),
+  ]),
+  cat("🌐 인터넷", 185, [
+    blk("net_weather", { CITY: T("서울") }), blk("net_text", { URL: T("https://example.com") }),
+    blk("net_raw", { URL: T("https://api.github.com") }), blk("net_online"),
+  ]),
   cat("🔢 계산", "%{BKY_MATH_HUE}", [
     blk("math_number"), blk("math_arithmetic", { A: N(1), B: N(1) }),
     blk("math_random_int", { FROM: N(1), TO: N(100) }), blk("math_random_float"),
@@ -616,6 +650,45 @@ const spr = (type, s, extra) => Object.assign({ type, fields: Object.assign({ S:
 const rnd = (a, b) => ({ block: { type: "math_random_int", inputs: { FROM: nm(a), TO: nm(b) } } });
 
 const EXAMPLES = {
+  "⏱ 반응속도 게임 (최고기록 저장)": {
+    variables: [{ name: "기록", id: "v_rec" }, { name: "최고기록", id: "v_best" }],
+    blocks: { languageVersion: 0, blocks: [
+      onStart(40, 30, [
+        { type: "variables_set", fields: { VAR: { id: "v_best" } }, inputs: { VALUE: { block: { type: "data_load", inputs: { KEY: tx("최고기록"), DEF: nm(99) } } } } },
+        { type: "var_show", fields: { VAR: { id: "v_best" } } },
+        { type: "spr_new", fields: { NAME: "버튼", SHAPE: "🍎" } },
+        spr("spr_show", "버튼", { fields: { ON: "hide" } }),
+        { type: "ui_alert", inputs: { TEXT: tx("확인을 누르고, 사과가 나타나면 최대한 빨리 클릭하세요!") } },
+        { type: "time_sleep", inputs: { SEC: rnd(2, 5) } },
+        spr("spr_goto", "버튼", { inputs: { X: rnd(-200, 200), Y: rnd(-200, 200) } }),
+        spr("spr_show", "버튼", { fields: { ON: "show" } }),
+        { type: "timer_do", fields: { A: "reset" } },
+        { type: "timer_show", fields: { ON: "show" } },
+      ]),
+      { type: "ev_sprite_click", x: 560, y: 30, fields: { S: "버튼" }, next: { block: chain([
+        { type: "variables_set", fields: { VAR: { id: "v_rec" } }, inputs: { VALUE: { block: { type: "timer_value" } } } },
+        { type: "timer_do", fields: { A: "stop" } },
+        spr("spr_show", "버튼", { fields: { ON: "hide" } }),
+        { type: "controls_if", extraState: { hasElse: true }, inputs: {
+          IF0: { block: { type: "logic_compare", fields: { OP: "LT" }, inputs: { A: getv("v_rec"), B: getv("v_best") } } },
+          DO0: { block: chain([
+            { type: "variables_set", fields: { VAR: { id: "v_best" } }, inputs: { VALUE: getv("v_rec") } },
+            { type: "data_save", inputs: { KEY: tx("최고기록"), V: getv("v_rec") } },
+            { type: "snd_note", fields: { HZ: "523" }, inputs: { SEC: nm(0.3) } },
+            { type: "ui_big", inputs: { TITLE: tx("신기록!"), TEXT: { block: { type: "text_join", extraState: { itemCount: 2 }, inputs: { ADD0: tx("🎉 신기록! "), ADD1: getv("v_rec") } } } } },
+          ]) },
+          ELSE: { block: { type: "ui_big", inputs: { TITLE: tx("기록"), TEXT: { block: { type: "text_join", extraState: { itemCount: 3 }, inputs: { ADD0: getv("v_rec"), ADD1: tx("초 (최고 "), ADD2: getv("v_best") } } } } } },
+        } },
+      ]) } },
+    ] },
+  },
+  "🌤 오늘 날씨 알려주기": {
+    blocks: { languageVersion: 0, blocks: [onStart(40, 40, [
+      { type: "ui_ask", inputs: { TEXT: tx("어느 도시 날씨를 알려줄까요? (예: 서울)") } },
+      { type: "ui_big", inputs: { TITLE: tx("날씨"), TEXT: { block: { type: "text_join", extraState: { itemCount: 3 }, inputs: {
+        ADD0: { block: { type: "ui_answer" } }, ADD1: tx(" 날씨: "), ADD2: { block: { type: "net_weather", inputs: { CITY: { block: { type: "ui_answer" } } } } } } } } } },
+    ])] },
+  },
   "🎮 별 받기 게임": {
     variables: [{ name: "점수", id: "v_score" }],
     blocks: { languageVersion: 0, blocks: [
