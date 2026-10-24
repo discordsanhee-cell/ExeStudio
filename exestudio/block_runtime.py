@@ -481,14 +481,38 @@ class _Stage(QWidget):
                 p.setFont(QFont("Malgun Gothic", 16, QFont.Weight.Bold))
                 p.drawText(self.pt(x, y), text)
         if self.visible:
-            a = math.radians(self.heading)
-            tip = (self.x + 14 * math.cos(a), self.y + 14 * math.sin(a))
-            l = (self.x + 8 * math.cos(a + 2.5), self.y + 8 * math.sin(a + 2.5))
-            r = (self.x + 8 * math.cos(a - 2.5), self.y + 8 * math.sin(a - 2.5))
-            p.setPen(QPen(QColor("#222222"), 1))
-            p.setBrush(self.color)
-            p.drawPolygon(QPolygonF([self.pt(*tip), self.pt(*l), self.pt(*r)]))
+            self._draw_turtle(p)
         p.end()
+
+    def _draw_turtle(self, p):
+        """A real little turtle (shell in the pen colour), facing the current heading."""
+        p.save()
+        p.translate(self.pt(self.x, self.y))
+        p.rotate(-self.heading)  # turtle angles go counter-clockwise, screen rotation goes clockwise
+        p.scale(1.4, 1.4)
+        skin, outline = QColor("#5fa85a"), QColor("#2f5e2c")
+        p.setPen(QPen(outline, 1.2))
+        p.setBrush(skin)
+        for lx, ly in ((7, 9), (7, -9), (-7, 9), (-7, -9)):  # legs
+            p.drawEllipse(QPointF(lx, ly), 4.2, 3.4)
+        p.drawPolygon(QPolygonF([QPointF(-11, -2.5), QPointF(-17, 0), QPointF(-11, 2.5)]))  # tail
+        p.drawEllipse(QPointF(15, 0), 5.5, 4.6)  # head
+        p.setBrush(QColor("#111111"))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.drawEllipse(QPointF(17.5, 2.0), 1.1, 1.1)  # eyes
+        p.drawEllipse(QPointF(17.5, -2.0), 1.1, 1.1)
+        shell = QColor(self.color)
+        if shell.lightness() > 235:  # keep a white pen's turtle visible on a white stage
+            shell = QColor("#d9d9d9")
+        p.setPen(QPen(shell.darker(160), 1.6))
+        p.setBrush(shell)
+        p.drawEllipse(QPointF(0, 0), 12, 10)  # shell
+        p.setPen(QPen(shell.darker(135), 1.1))
+        p.drawEllipse(QPointF(0, 0), 5, 4.2)  # shell pattern
+        for ang in range(0, 360, 60):
+            r = math.radians(ang)
+            p.drawLine(QPointF(5 * math.cos(r), 4.2 * math.sin(r)), QPointF(11 * math.cos(r), 9 * math.sin(r)))
+        p.restore()
 
     def step_to(self, x, y):
         if self.pen:
@@ -513,8 +537,7 @@ def _stage():
                 break
         if host is None and not _STATE["has_design"]:
             host = _WIN.content
-            if not _WIN.isVisible():
-                _WIN.resize(600, 600 + _WIN.titlebar.height())
+            _WIN.resize(max(_WIN.width(), 600), max(_WIN.height(), 600 + _WIN.titlebar.height()))
         if host is not None:
             st = _Stage(host)
             lay = QVBoxLayout(host)
