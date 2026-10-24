@@ -51,40 +51,75 @@ def _github_repo(source):
     return None
 
 
+def _allowed_url(url):
+    """https only; plain http just for this PC itself (local test servers). (2026-low_1023-ERC31)"""
+    low = url.lower()
+    return low.startswith("https://") or low.startswith(("http://127.0.0.1", "http://localhost"))
+
+
 def _get(url, timeout=20):
+    if not _allowed_url(url):
+        raise RuntimeError(f"보안 연결(https)이 아닌 주소는 쓸 수 없어요: {url}")
     req = urllib.request.Request(url, headers=UA)
     with urllib.request.urlopen(req, timeout=timeout) as r:
+        if not _allowed_url(r.geturl()):
+            raise RuntimeError("업데이트 주소가 보안 연결이 아닌 곳으로 바뀌었어요.")
         return r.read()
 
 
+def signing_payload(man):
+    """Exact bytes the release key signs: every manifest field except the signature itself."""
+    body = {k: v for k, v in man.items() if k != "signature"}
+    return json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+
+
+def verify_manifest(man):
+    """Rejects any manifest not signed with the release key, so even someone who takes over the GitHub account
+    or the download server cannot push an update (2026-mid_1023-ERC90)."""
+    import base64
+
+    from cryptography.exceptions import InvalidSignature
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    from .update_key import PUBLIC_KEY_B64
+    sig = man.get("signature")
+    if not isinstance(sig, str) or not sig:
+        raise RuntimeError("업데이트에 서명이 없어요. 정식 업데이트가 아니라서 설치하지 않아요.")
+    if not isinstance(man.get("sha256"), str) or len(man["sha256"]) != 64:
+        raise RuntimeError("업데이트 정보에 파일 검증값이 없어요.")
+    try:
+        key = Ed25519PublicKey.from_public_bytes(base64.b64decode(PUBLIC_KEY_B64))
+        key.verify(base64.b64decode(sig), signing_payload(man))
+    except (InvalidSignature, ValueError):
+        raise RuntimeError("업데이트 서명이 올바르지 않아요. 위조됐을 수 있어서 설치하지 않아요.") from None
+    return man
+
+
 def fetch_manifest(source):
-    """Returns the manifest dict with an absolute 'package_url' (http URL or local path)."""
+    """Returns the verified manifest with an absolute 'package_url' (https URL or local path)."""
     if not source:
         raise RuntimeError("업데이트 주소가 설정되지 않았어요 (설정 → 업데이트).")
     repo = _github_repo(source)
     if repo:
         rel = json.loads(_get(f"https://api.github.com/repos/{repo[0]}/{repo[1]}/releases/latest"))
         assets = {a["name"]: a["browser_download_url"] for a in rel.get("assets", [])}
-        if "manifest.json" in assets:
-            man = json.loads(_get(assets["manifest.json"]))
-        else:
-            man = {"version": rel.get("tag_name", "0").lstrip("vV"), "notes": rel.get("body") or ""}
-            man["package"] = next((n for n in assets if n.lower().endswith(".zip")), "")
-        man.setdefault("notes", rel.get("body") or "")
+        if "manifest.json" not in assets:
+            raise RuntimeError("최신 릴리스에 manifest.json이 없어요.")
+        man = verify_manifest(json.loads(_get(assets["manifest.json"])))
         man["package_url"] = assets.get(man.get("package", ""), "")
         man["page"] = rel.get("html_url", "")
         return man
-    if source.startswith(("http://", "https://")):
-        man = json.loads(_get(source))
+    if source.lower().startswith(("http://", "https://")):
+        man = verify_manifest(json.loads(_get(source)))
         base = source.rsplit("/", 1)[0]
         pkg = man.get("package", "")
-        man["package_url"] = pkg if pkg.startswith("http") else f"{base}/{pkg}"
+        man["package_url"] = pkg if pkg.lower().startswith(("http://", "https://")) else f"{base}/{pkg}"
         return man
     p = Path(source)
     if p.is_dir():
         p = p / "manifest.json"
-    man = json.loads(p.read_text(encoding="utf-8-sig"))
-    man["package_url"] = str(p.parent / man.get("package", ""))
+    man = verify_manifest(json.loads(p.read_text(encoding="utf-8-sig")))
+    man["package_url"] = str(p.parent / Path(man.get("package", "")).name)
     return man
 
 
@@ -99,8 +134,10 @@ def download(man, progress=None):
     if not url:
         raise RuntimeError("업데이트 파일 주소가 없어요.")
     STAGING.mkdir(parents=True, exist_ok=True)
-    dest = STAGING / f"ExeStudio-{man.get('version', 'new')}.zip"
-    if url.startswith(("http://", "https://")):
+    dest = STAGING / "update_package.zip"
+    if url.lower().startswith(("http://", "https://")):
+        if not _allowed_url(url):
+            raise RuntimeError(f"보안 연결(https)이 아닌 주소는 쓸 수 없어요: {url}")
         req = urllib.request.Request(url, headers={"User-Agent": UA["User-Agent"]})
         with urllib.request.urlopen(req, timeout=60) as r, open(dest, "wb") as f:
             total = int(r.headers.get("Content-Length") or man.get("size") or 0)
@@ -117,15 +154,14 @@ def download(man, progress=None):
         shutil.copyfile(url, dest)
         if progress:
             progress((1, 1))
-    want = man.get("sha256")
-    if want:
-        h = hashlib.sha256()
-        with open(dest, "rb") as f:
-            for chunk in iter(lambda: f.read(1 << 20), b""):
-                h.update(chunk)
-        if h.hexdigest().lower() != want.lower():
-            dest.unlink(missing_ok=True)
-            raise RuntimeError("다운로드한 파일이 손상됐어요 (체크섬 불일치). 다시 시도해 주세요.")
+    want = man.get("sha256") or ""
+    h = hashlib.sha256()
+    with open(dest, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    if not want or h.hexdigest().lower() != want.lower():
+        dest.unlink(missing_ok=True)
+        raise RuntimeError("다운로드한 파일이 서명된 업데이트 정보와 달라요. 설치하지 않아요.")
     return dest
 
 
@@ -145,6 +181,10 @@ def launch_swap(new_dir, target=None, pid=None, restart=True):
     """Starts a hidden script that waits for this process to exit, copies the new files over the install
     folder (runtime/ is kept) and restarts the app. The caller must quit right after."""
     target = Path(target or install_dir())
+    if not target.is_absolute() or not (target / "ExeStudio.exe").is_file():
+        raise RuntimeError(f"설치 폴더가 올바르지 않아요: {target}")
+    if not (Path(new_dir) / "ExeStudio.exe").is_file():
+        raise RuntimeError("업데이트 파일이 올바르지 않아요.")
     pid = pid or os.getpid()
     script = STAGING / "apply_update.ps1"
     log = STAGING / "apply_update.log"

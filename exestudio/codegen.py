@@ -96,8 +96,8 @@ KOREAN_NAMES = {"label": "글자", "button": "버튼", "input": "입력칸", "te
 def valid_name(name):
     """Python identifier (Korean allowed) that doesn't shadow a window attribute like `close`."""
     from .frameless import FramelessWindow
-    return bool(name) and name.isidentifier() and not keyword.iskeyword(name) and not name.startswith("_") \
-        and name not in RESERVED and not hasattr(FramelessWindow, name)
+    return isinstance(name, str) and name.isidentifier() and not keyword.iskeyword(name) \
+        and not name.startswith("_") and name not in RESERVED and not hasattr(FramelessWindow, name)
 
 
 def name_from_text(kind, text):
@@ -107,6 +107,66 @@ def name_from_text(kind, text):
         return None
     suffix = KOREAN_NAMES.get(kind, "")
     return base if base.endswith(suffix) else base + suffix
+
+
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".webp"}
+
+
+def _as_int(v, default=0, lo=-100000, hi=100000):
+    try:
+        return max(lo, min(hi, int(float(v))))
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
+def sanitize_design(design):
+    """Designs can come from files other people hand you, and their values end up in Python that the designer
+    exec()s. Keep only known keys with the expected types so nothing can smuggle code in (2026-high_1023-ERC42),
+    and let image paths point only at real image files (2026-low_1023-ERC95)."""
+    src = design if isinstance(design, dict) else {}
+    out = {"title": str(src.get("title", "내 앱"))[:200],
+           "width": _as_int(src.get("width"), 720, 120, 4000),
+           "height": _as_int(src.get("height"), 460, 80, 3000),
+           "bg": str(src.get("bg", "#14151c"))[:40],
+           "items": []}
+    used = set()
+    items = src.get("items") if isinstance(src.get("items"), list) else []
+    for raw in items:
+        if not isinstance(raw, dict) or raw.get("type") not in TYPES:
+            continue
+        kind = raw["type"]
+        meta = TYPES[kind]
+        name = raw.get("name")
+        if not valid_name(name) or name in used:
+            n = 1
+            while f"{KOREAN_NAMES[kind]}{n}" in used:
+                n += 1
+            name = f"{KOREAN_NAMES[kind]}{n}"
+        used.add(name)
+        it = {"type": kind, "name": name,
+              "x": _as_int(raw.get("x"), 0, 0, 8000), "y": _as_int(raw.get("y"), 0, 0, 8000),
+              "w": _as_int(raw.get("w"), meta["w"], 8, 8000), "h": _as_int(raw.get("h"), meta["h"], 8, 8000)}
+        for key, default in meta["props"].items():
+            val = raw.get(key, default)
+            if isinstance(default, bool):
+                it[key] = bool(val)
+            elif isinstance(default, int):
+                it[key] = _as_int(val, default)
+            else:
+                it[key] = str(val if val is not None else "")[:20000]
+        if kind == "image":
+            p = it.get("path", "")
+            if p and (Path(p).suffix.lower() not in IMAGE_EXTS or not Path(p).is_file()):
+                it["path"] = ""
+        if kind == "label" and it.get("align") not in ALIGN:
+            it["align"] = "left"
+        if kind == "button" and it.get("action") not in ACTIONS:
+            it["action"] = "none"
+        if isinstance(raw.get("tooltip"), str):
+            it["tooltip"] = raw["tooltip"][:500]
+        it["auto_name"] = bool(raw.get("auto_name", False))
+        out["items"].append(it)
+    return out
 
 
 def qss_color(s):
@@ -179,7 +239,7 @@ _b64_cache = {}
 
 
 def _image_b64(path):
-    if not path:
+    if not path or Path(path).suffix.lower() not in IMAGE_EXTS:
         return None
     p = Path(path)
     try:
@@ -197,8 +257,11 @@ def _items(s):
 
 def widget_lines(it):
     """Python statements creating one designer item as `self.<name>` inside `self.content`."""
+    if it.get("type") not in TYPES or not valid_name(it.get("name")):
+        raise ValueError(f"잘못된 위젯 정보: {it.get('type')!r} / {it.get('name')!r}")
     t, s = it["type"], f"self.{it['name']}"
     cls = TYPES[t]["cls"]
+    x, y, w, h = (_as_int(it.get(k), 0) for k in ("x", "y", "w", "h"))
     L = []
     if t in ("label", "button", "checkbox", "radio"):
         L.append(f"{s} = {cls}({it.get('text', '')!r}, self.content)")
@@ -206,7 +269,7 @@ def widget_lines(it):
         L.append(f"{s} = QSlider(Qt.Orientation.Horizontal, self.content)")
     else:
         L.append(f"{s} = {cls}(self.content)")
-    L.append(f"{s}.setGeometry({it['x']}, {it['y']}, {it['w']}, {it['h']})")
+    L.append(f"{s}.setGeometry({x}, {y}, {w}, {h})")
     if t == "label":
         L.append(f"{s}.setAlignment({ALIGN.get(it.get('align', 'left'), ALIGN['left'])})")
         L.append(f"{s}.setWordWrap(True)")

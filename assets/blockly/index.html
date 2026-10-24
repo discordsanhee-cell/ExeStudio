@@ -205,14 +205,18 @@ F.msg_send = (b) => `_broadcast(${q(b.getFieldValue("MSG"))})\n`;
 F.key_down = (b) => call(`_key_down(${q(b.getFieldValue("KEY"))})`);
 
 const W = (b) => q(b.getFieldValue("W"));
+// A field that becomes Python syntax (method/attribute name) must be one of the allowed values; everything
+// else goes through q(). Blocks can come from files other people share (2026-high_1023-ERC57).
+const pick = (b, name, allowed) => { const v = b.getFieldValue(name); return allowed.includes(v) ? v : allowed[0]; };
+const fv = (b, name) => q(b.getFieldValue(name));
 F.w_set_text = (b) => `_set_text(${W(b)}, ${val(b, "V", "''")})\n`;
 F.w_get_text = (b) => call(`_get_text(${W(b)})`);
 F.w_set_value = (b) => `_set_value(${W(b)}, ${val(b, "V", "0")})\n`;
 F.w_add_value = (b) => `_set_value(${W(b)}, _num(_get_value(${W(b)})) + ${val(b, "V", "1")})\n`;
 F.w_get_value = (b) => call(`_get_value(${W(b)})`);
 F.w_checked = (b) => call(`bool(_get_value(${W(b)}))`);
-F.w_vis = (b) => `_set_visible(${W(b)}, '${b.getFieldValue("MODE")}')\n`;
-F.w_color = (b) => `_set_color(${W(b)}, '${b.getFieldValue("WHICH")}', '${b.getFieldValue("C")}')\n`;
+F.w_vis = (b) => `_set_visible(${W(b)}, ${fv(b, "MODE")})\n`;
+F.w_color = (b) => `_set_color(${W(b)}, ${fv(b, "WHICH")}, ${fv(b, "C")})\n`;
 F.w_move = (b) => `_move(${W(b)}, ${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`;
 F.w_list_add = (b) => `_list_add(${W(b)}, ${val(b, "V", "''")})\n`;
 F.w_list_clear = (b) => `_list_clear(${W(b)})\n`;
@@ -233,36 +237,36 @@ F.ctrl_forever = (b) => `while True:\n${G.INDENT}_tick()\n${G.statementToCode(b,
 F.sys_url = (b) => { need("import_web"); return `webbrowser.open(str(${val(b, "URL", "''")}))\n`; };
 F.sys_run = (b) => `subprocess.Popen(str(${val(b, "CMD", "''")}), shell=True)\n`;
 F.sys_beep = () => { need("import_winsound"); return "winsound.MessageBeep()\n"; };
-F.sys_write = (b) => `with open(str(${val(b, "PATH", "'memo.txt'")}), '${b.getFieldValue("MODE")}', encoding='utf-8') as _f:\n    _f.write(str(${val(b, "TEXT", "''")}) + '\\n')\n`;
+F.sys_write = (b) => `with open(str(${val(b, "PATH", "'memo.txt'")}), ${q(pick(b, "MODE", ["w", "a"]))}, encoding='utf-8') as _f:\n    _f.write(str(${val(b, "TEXT", "''")}) + '\\n')\n`;
 F.sys_read = (b) => call(`open(str(${val(b, "PATH", "'memo.txt'")}), encoding='utf-8').read()`);
 F.sys_clip = (b) => `_clip(${val(b, "TEXT", "''")})\n`;
 F.sys_exit = () => "_exit()\n";
 F.auto_click_xy = (b) => { need("import_pyautogui"); return `pyautogui.click(${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`; };
-F.auto_click = (b) => { need("import_pyautogui"); return `pyautogui.${b.getFieldValue("BTN")}()\n`; };
+F.auto_click = (b) => { need("import_pyautogui"); return `pyautogui.${pick(b, "BTN", ["click", "doubleClick", "rightClick"])}()\n`; };
 F.auto_move = (b) => { need("import_pyautogui"); return `pyautogui.moveTo(${val(b, "X", "0")}, ${val(b, "Y", "0")}, duration=0.2)\n`; };
 F.auto_type = (b) => { need("type_helper"); return `_type(${val(b, "TEXT", "''")})\n`; };
-F.auto_key = (b) => { need("import_pyautogui"); return `pyautogui.press('${b.getFieldValue("KEY")}')\n`; };
+F.auto_key = (b) => { need("import_pyautogui"); return `pyautogui.press(${fv(b, "KEY")})\n`; };
 F.auto_hotkey = (b) => {
   need("import_pyautogui");
-  const keys = b.getFieldValue("KEYS").split("+").map((k) => `'${k.trim().toLowerCase().replace(/'/g, "")}'`).join(", ");
+  const keys = b.getFieldValue("KEYS").split("+").map((k) => q(k.trim().toLowerCase())).join(", ");
   return `pyautogui.hotkey(${keys})\n`;
 };
 F.auto_scroll = (b) => { need("import_pyautogui"); return `pyautogui.scroll(int(${val(b, "N", "100")}))\n`; };
 F.auto_shot = (b) => { need("import_pyautogui"); return `pyautogui.screenshot(str(${val(b, "PATH", "'screen.png'")}))\n`; };
-F.auto_pos = (b) => { need("import_pyautogui"); return call(`pyautogui.position().${b.getFieldValue("AXIS")}`); };
-F.t_move = (b) => `_T.${b.getFieldValue("DIR")}(${val(b, "N", "100")})\n`;
-F.t_turn = (b) => `_T.${b.getFieldValue("DIR")}(${val(b, "N", "90")})\n`;
+F.auto_pos = (b) => { need("import_pyautogui"); return call(`pyautogui.position().${pick(b, "AXIS", ["x", "y"])}`); };
+F.t_move = (b) => `_T.${pick(b, "DIR", ["forward", "back"])}(${val(b, "N", "100")})\n`;
+F.t_turn = (b) => `_T.${pick(b, "DIR", ["right", "left"])}(${val(b, "N", "90")})\n`;
 F.t_goto = (b) => `_T.goto(${val(b, "X", "0")}, ${val(b, "Y", "0")})\n`;
 F.t_circle = (b) => `_T.circle(${val(b, "R", "50")})\n`;
-F.t_color = (b) => `_T.color('${b.getFieldValue("C")}')\n`;
-F.t_bg = (b) => `_T.bgcolor('${b.getFieldValue("C")}')\n`;
+F.t_color = (b) => `_T.color(${fv(b, "C")})\n`;
+F.t_bg = (b) => `_T.bgcolor(${fv(b, "C")})\n`;
 F.t_width = (b) => `_T.width(${val(b, "N", "2")})\n`;
-F.t_pen = (b) => `_T.${b.getFieldValue("P")}()\n`;
-F.t_fill = (b) => `_T.${b.getFieldValue("F")}()\n`;
-F.t_speed = (b) => `_T.speed(${b.getFieldValue("S")})\n`;
+F.t_pen = (b) => `_T.${pick(b, "P", ["pendown", "penup"])}()\n`;
+F.t_fill = (b) => `_T.${pick(b, "F", ["begin_fill", "end_fill"])}()\n`;
+F.t_speed = (b) => `_T.speed(${Number(b.getFieldValue("S")) || 0})\n`;
 F.t_write = (b) => `_T.write(${val(b, "TEXT", "''")})\n`;
-F.t_misc = (b) => `_T.${b.getFieldValue("A")}()\n`;
-F.t_pos = (b) => call(`_T.pos('${b.getFieldValue("AXIS")}')`);
+F.t_misc = (b) => `_T.${pick(b, "A", ["hideturtle", "showturtle", "home", "clear"])}()\n`;
+F.t_pos = (b) => call(`_T.pos(${q(pick(b, "AXIS", ["x", "y"]))})`);
 
 // ------------------------------------------------------------------ toolbox
 const T = (text) => ({ shadow: { type: "text", fields: { TEXT: text } } });

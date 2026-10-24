@@ -143,6 +143,25 @@ def release_notes(version):
     return text.strip()
 
 
+SIGNING_KEY = Path(os.environ.get("EXESTUDIO_SIGNING_KEY")
+                   or Path.home() / ".exestudio" / "update_signing_key.pem")
+
+
+def sign_manifest(manifest):
+    """Ed25519-signs the manifest with the private key that lives only on the release PC."""
+    import base64
+
+    from cryptography.hazmat.primitives import serialization
+
+    from exestudio import updater
+    if not SIGNING_KEY.exists():
+        raise SystemExit(f"서명 키가 없어요: {SIGNING_KEY}\n이 키가 없으면 기존 사용자가 업데이트를 받을 수 없어요.")
+    key = serialization.load_pem_private_key(SIGNING_KEY.read_bytes(), password=None)
+    sig = base64.b64encode(key.sign(updater.signing_payload(manifest))).decode()
+    updater.verify_manifest(dict(manifest, signature=sig))  # the key must match the public key built into the app
+    return sig
+
+
 def make_zip(dest, include_runtime):
     import zipfile
     print(f"\nzipping -> {dest.name}", flush=True)
@@ -165,6 +184,7 @@ def publish(full):
     sha = hashlib.sha256(pkg.read_bytes()).hexdigest()
     manifest = {"version": ver, "date": datetime.date.today().isoformat(), "notes": release_notes(ver),
                 "package": pkg.name, "size": pkg.stat().st_size, "sha256": sha}
+    manifest["signature"] = sign_manifest(manifest)
     (RELEASE / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
     if full:
         make_zip(RELEASE / f"ExeStudio-{ver}-full.zip", include_runtime=True)

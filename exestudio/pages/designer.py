@@ -336,9 +336,7 @@ class DesignerPage(Page):
     def load_design(self, design):
         self.canvas.select(None)
         self.canvas.clear_items()
-        base = empty_design()
-        base.update(design)
-        self.design = base
+        self.design = codegen.sanitize_design(design)
         for data in self.design["items"]:
             self.canvas.add(data)
         self._apply_window()

@@ -1,7 +1,7 @@
 """Bottom banner that announces a new version, shows its notes and asks whether to update."""
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QMessageBox, QProgressBar, QTextBrowser,
                                QVBoxLayout)
 
@@ -53,7 +53,9 @@ class UpdateBanner(QFrame):
         self.size_label.setText(f"{man.get('date', '')}  ·  {size / 1024 / 1024:.0f} MB" if size else man.get("date", ""))
         notes = man.get("notes") or "업데이트 내용이 없어요."
         self.notes.setMarkdown(notes)
-        self.notes.verticalScrollBar().setValue(0)
+        # the document is laid out after this call returns, so scroll back to the top once that has happened
+        QTimer.singleShot(0, lambda: self.notes.verticalScrollBar().setValue(0))
+        QTimer.singleShot(150, lambda: self.notes.verticalScrollBar().setValue(0))
         self.progress.hide()
         for b in (self.btn_update, self.btn_later, self.btn_skip):
             b.setEnabled(True)
@@ -122,8 +124,6 @@ def check_for_updates(ctx, manual=False):
         man, newer = result
         if newer and (manual or man.get("version") != ctx.settings.get("skip_version")):
             ctx.main.update_banner.show_update(man)
-            if os.environ.get("EXESTUDIO_AUTO_UPDATE") == "1":  # unattended update (tests / scripted installs)
-                ctx.main.update_banner.start()
         elif manual:
             ctx.toast(f"최신 버전이에요 (v{APP_VERSION})")
 
