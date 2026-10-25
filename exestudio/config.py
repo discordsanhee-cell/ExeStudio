@@ -1,10 +1,10 @@
-import json
+﻿import json
 import os
 import sys
 from pathlib import Path
 
 APP_NAME = "EXE Studio"
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.4.1"
 FROZEN = getattr(sys, "frozen", False)
 
 
@@ -71,3 +71,4 @@ class Settings(dict):
         recent.insert(0, path)
         self["recent_files"] = recent[:15]
         self.save()
+
