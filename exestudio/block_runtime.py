@@ -1186,7 +1186,7 @@ def _yara_rules():
     return _YARA["rules"]
 
 
-def _download_checked(url, save_path, sha256=""):
+def _download_checked_inner(url, save_path, sha256=""):
     """Downloads an https file, checks it with ClamAV then YARA, and saves it only if both pass. Never runs it."""
     import hashlib
     import re
@@ -1233,6 +1233,18 @@ def _download_checked(url, save_path, sha256=""):
         return os.path.abspath(str(save_path))
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _download_checked(url, save_path, sha256=""):
+    import urllib.error
+    try:
+        return _download_checked_inner(url, save_path, sha256)
+    except RuntimeError:
+        raise
+    except urllib.error.URLError as e:
+        raise RuntimeError("인터넷 연결이나 주소를 확인해 주세요: " + str(getattr(e, "reason", e))) from None
+    except OSError:
+        raise RuntimeError("백신이 파일을 차단하거나 지웠어요. 저장하지 않았어요.") from None
 
 
 # ---------------------------------------------------------------- rule update and file scan
