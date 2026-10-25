@@ -1,4 +1,4 @@
-"""
+﻿"""
 Builds EXE Studio into dist/ExeStudio/ExeStudio.exe
 
     .venv\\Scripts\\python.exe build_exe.py              # full build (runtime + exe)
@@ -168,7 +168,7 @@ def make_zip(dest, include_runtime):
     with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
         for f in DIST.rglob("*"):
             rel = f.relative_to(DIST.parent)
-            if f.is_file() and (include_runtime or rel.parts[1] != "runtime"):
+            if f.is_file() and (include_runtime or rel.parts[1] != "runtime") and (include_runtime or "clamav" not in rel.parts):
                 z.write(f, rel)
     return dest
 
@@ -247,3 +247,4 @@ if __name__ == "__main__":
         ver, man = publish(args.full)
         if args.upload:
             upload(args.upload, ver, man)
+
