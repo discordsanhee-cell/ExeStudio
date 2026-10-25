@@ -82,7 +82,7 @@ function need(...keys) {
 const val = (b, name, def) => G.valueToCode(b, name, O.NONE) || def;
 const body = (b, name) => G.statementToCode(b, name) || G.INDENT + "pass\n";
 const q = (s) => JSON.stringify(String(s));
-G.addReservedWords("_download_checked,_port_list,_serial_open,_serial_send,_serial_last,_battery,_battery_charging,_usb_watch,_answer,_t,_T,_ui,_tick,_wait,_on,_fire,_broadcast,_alert,_big,_confirm,_ask_text,_ask_number,_clip,_type,_color,_w,_set_text,_get_text,_set_value,_get_value,_set_visible,_set_color,_move,_list_add,_list_clear,_set_title,_key_down,_exit,_num,pyautogui,winsound,webbrowser,datetime,time,math,random,os,sys,threading,MainWindow");
+G.addReservedWords("_rules_update,_scan_file,_scan_last,_download_checked,_port_list,_serial_open,_serial_send,_serial_last,_battery,_battery_charging,_usb_watch,_answer,_t,_T,_ui,_tick,_wait,_on,_fire,_broadcast,_alert,_big,_confirm,_ask_text,_ask_number,_clip,_type,_color,_w,_set_text,_get_text,_set_value,_get_value,_set_visible,_set_color,_move,_list_add,_list_clear,_set_title,_key_down,_exit,_num,pyautogui,winsound,webbrowser,datetime,time,math,random,os,sys,threading,MainWindow");
 
 // ------------------------------------------------------------------ block definitions
 const COLORS = [["🔴 빨강", "red"], ["🟠 주황", "orange"], ["🟡 노랑", "gold"], ["🟢 초록", "green"],
@@ -260,6 +260,10 @@ Blockly.common.defineBlocksWithJsonArray([
   { type: "usb_list", message0: "🔌 연결된 장치 목록", output: "String", colour: 200 },
   { type: "battery_value", message0: "🔋 배터리 % (노트북만, 없으면 -1)", output: "Number", colour: 60 },
   { type: "battery_charging", message0: "🔋 충전 중인가?", output: "Boolean", colour: 60 },
+  stmt({ type: "rules_update", message0: "🔄 규칙 업데이트 %1", args0: [{ type: "field_dropdown", name: "WHICH", options: [["YARA + ClamAV 둘 다", "both"], ["YARA 규칙만", "yara"], ["ClamAV 바이러스 DB만", "clamav"]] }], colour: 185,
+    tooltip: "YARA 규칙은 GitHub(https)에서 받아 컴파일해 본 뒤에만 바꿔요" }),
+  { type: "scan_file", message0: "🛡 %1 로 파일 %2 검사하기 (깨끗하면 참)", args0: [{ type: "field_dropdown", name: "ENGINE", options: [["YARA + ClamAV 둘 다", "both"], ["YARA로만", "yara"], ["ClamAV로만", "clamav"]] }, any("PATH")], output: "Boolean", colour: 185 },
+  { type: "scan_last", message0: "🛡 마지막 검사 결과", output: "String", colour: 185 },
 ]);
 // event blocks get the round "hat" top
 for (const t of ["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click", "ev_usb_in", "ev_usb_out", "ev_serial"]) {
@@ -338,6 +342,10 @@ F.serial_last = (b) => call(`_serial_last(${val(b, "PORT", "'COM3'")})`);
 F.usb_last = () => call("_STATE.get('usb_last', '')");
 F.usb_list = () => call("', '.join(_port_list())");
 F.battery_value = () => call("_battery()");
+F.rules_update = (b) => `_rules_update(${q(pick(b, "WHICH", ["both", "yara", "clamav"]))})
+`;
+F.scan_file = (b) => call(`_scan_file(${val(b, "PATH", "''")}, ${q(pick(b, "ENGINE", ["both", "yara", "clamav"]))})`);
+F.scan_last = () => call("_scan_last()");
 F.battery_charging = () => call("_battery_charging()");
 F.net_text = (b) => call(`_net_text(${val(b, "URL", "''")})`);
 F.net_raw = (b) => call(`_net_get(${val(b, "URL", "''")})`);
@@ -481,6 +489,10 @@ const toolbox = { kind: "categoryToolbox", contents: [
     label("USB 장치를 꽂거나 뽑을 때, 시리얼로 글을 주고받을 때 쓰는 블록이에요"),
     blk("ev_usb_in"), blk("ev_usb_out"), blk("ev_serial"), blk("usb_open"), blk("serial_send"),
     blk("serial_last"), blk("usb_last"), blk("usb_list"),
+  ]),
+  cat("🛡 파일 검사", 185, [
+    label("ClamAV와 YARA로 파일을 검사해요. 실행은 하지 않아요"),
+    blk("rules_update"), blk("scan_file", { PATH: T("C:\Users\나\받은파일.exe") }), blk("scan_last"),
   ]),
   cat("🔋 배터리", 60, [
     label("노트북에서만 값이 있어요. 데스크톱은 -1이에요"),

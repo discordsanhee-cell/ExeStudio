@@ -1235,6 +1235,98 @@ def _download_checked(url, save_path, sha256=""):
         shutil.rmtree(work, ignore_errors=True)
 
 
+# ---------------------------------------------------------------- rule update and file scan
+_RULES_URL = "https://github.com/Neo23x0/signature-base/archive/refs/heads/master.zip"
+_SCAN_LAST = {"msg": ""}
+
+
+def _clam_bin(name):
+    return os.path.join(_SCAN_HOME, "clamav-bin", "ClamAV", name)
+
+
+def _rules_update(which="both"):
+    """Updates YARA rules (signature-base, checked before use) and/or the ClamAV database."""
+    import shutil
+    import subprocess
+    import tempfile
+    import urllib.request
+    import zipfile
+    done = []
+    if which in ("yara", "both"):
+        work = tempfile.mkdtemp(prefix="esd_rules_")
+        try:
+            zp = os.path.join(work, "rules.zip")
+            with _released():
+                urllib.request.urlretrieve(_RULES_URL, zp)  # fixed https address
+            staged = os.path.join(work, "yara")
+            os.makedirs(staged)
+            with zipfile.ZipFile(zp) as z:
+                for n in z.namelist():
+                    if "/yara/" in n and n.lower().endswith((".yar", ".yara")) and not n.endswith("/"):
+                        with z.open(n) as src, open(os.path.join(staged, os.path.basename(n)), "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+            import yara
+            files = {os.path.splitext(f)[0]: os.path.join(staged, f) for f in os.listdir(staged)}
+            ext = {k: "" for k in ("filename", "filepath", "extension", "filetype", "md5", "owner")}
+            yara.compile(filepaths=files, externals=ext)  # refuse a rule set that does not compile
+            target = os.path.join(_SCAN_HOME, "yara")
+            if os.path.exists(target):
+                shutil.rmtree(target)
+            shutil.copytree(staged, target)
+            _YARA.clear()
+            done.append(f"YARA 규칙 {len(files)}개")
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+    if which in ("clamav", "both"):
+        fresh = _clam_bin("freshclam.exe")
+        if not os.path.exists(fresh):
+            raise RuntimeError("ClamAV가 없어요. ExeStudio를 한 번 실행해 주세요.")
+        db = os.path.join(_SCAN_HOME, "clamav")
+        os.makedirs(db, exist_ok=True)
+        conf = os.path.join(db, "freshclam.conf")
+        with open(conf, "w", encoding="ascii") as f:
+            f.write("DatabaseDirectory " + db + chr(10) + "DatabaseMirror database.clamav.net" + chr(10))
+        with _released():
+            p = subprocess.run([fresh, "--config-file=" + conf], capture_output=True, text=True,
+                               creationflags=0x08000000, timeout=1800)
+        if p.returncode not in (0, 1):
+            raise RuntimeError("ClamAV DB 업데이트 실패")
+        done.append("ClamAV 바이러스 DB")
+    return ", ".join(done) + " 업데이트 완료"
+
+
+def _scan_file(path, engine="both"):
+    """True when the file is clean. The reason is kept for the '마지막 검사 결과' block."""
+    import subprocess
+    import re
+    path = str(path)
+    if not os.path.isfile(path):
+        raise RuntimeError("검사할 파일이 없어요: " + path)
+    reasons = []
+    if engine in ("clamav", "both"):
+        clam = _clam_bin("clamscan.exe")
+        if not os.path.exists(clam):
+            raise RuntimeError("ClamAV가 없어요. ExeStudio를 한 번 실행해 주세요.")
+        with _released():
+            p = subprocess.run([clam, "--no-summary", "--database=" + os.path.join(_SCAN_HOME, "clamav"), path],
+                               capture_output=True, text=True, creationflags=0x08000000, timeout=600)
+        if p.returncode == 1:
+            reasons.append("ClamAV 탐지: " + (p.stdout.strip() or "위협"))
+        elif p.returncode != 0:
+            raise RuntimeError("ClamAV 검사 오류")
+    if engine in ("yara", "both"):
+        hits = [m.rule for m in _yara_rules().match(path, externals=_YARA["ext"])]
+        hits = [h for h in hits if not any(re.search(x, h) for x in _SCAN_EXCLUDE)]
+        if hits:
+            reasons.append("YARA 탐지: " + ", ".join(hits[:5]))
+    _SCAN_LAST["msg"] = " / ".join(reasons) if reasons else "깨끗함"
+    return not reasons
+
+
+def _scan_last():
+    return _SCAN_LAST["msg"]
+
+
 # ---------------------------------------------------------------- USB and serial
 def _port_list():
     if _list_ports is None:
