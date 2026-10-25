@@ -82,7 +82,7 @@ function need(...keys) {
 const val = (b, name, def) => G.valueToCode(b, name, O.NONE) || def;
 const body = (b, name) => G.statementToCode(b, name) || G.INDENT + "pass\n";
 const q = (s) => JSON.stringify(String(s));
-G.addReservedWords("_answer,_t,_T,_ui,_tick,_wait,_on,_fire,_broadcast,_alert,_big,_confirm,_ask_text,_ask_number,_clip,_type,_color,_w,_set_text,_get_text,_set_value,_get_value,_set_visible,_set_color,_move,_list_add,_list_clear,_set_title,_key_down,_exit,_num,pyautogui,winsound,webbrowser,datetime,time,math,random,os,sys,threading,MainWindow");
+G.addReservedWords("_download_checked,_port_list,_serial_open,_serial_send,_serial_last,_battery,_battery_charging,_usb_watch,_answer,_t,_T,_ui,_tick,_wait,_on,_fire,_broadcast,_alert,_big,_confirm,_ask_text,_ask_number,_clip,_type,_color,_w,_set_text,_get_text,_set_value,_get_value,_set_visible,_set_color,_move,_list_add,_list_clear,_set_title,_key_down,_exit,_num,pyautogui,winsound,webbrowser,datetime,time,math,random,os,sys,threading,MainWindow");
 
 // ------------------------------------------------------------------ block definitions
 const COLORS = [["🔴 빨강", "red"], ["🟠 주황", "orange"], ["🟡 노랑", "gold"], ["🟢 초록", "green"],
@@ -245,8 +245,24 @@ Blockly.common.defineBlocksWithJsonArray([
   stmt({ type: "timer_show", message0: "⏱ 타이머 화면에 %1", args0: [dd("ON", [["보이기", "show"], ["숨기기", "hide"]])], colour: C_TIME }),
 ]);
 
+
+// ------------------------------------------------------------------ download check, USB/serial, battery (v1.4.0)
+Blockly.common.defineBlocksWithJsonArray([
+  hatDef({ type: "ev_usb_in", message0: "🔌 USB 장치가 연결되면" }),
+  hatDef({ type: "ev_usb_out", message0: "🔌 USB 장치 연결이 해제되면" }),
+  hatDef({ type: "ev_serial", message0: "📡 %1 포트에서 글을 받으면", args0: [{ type: "field_input", name: "PORT", text: "COM3" }] }),
+  stmt({ type: "dl_save", message0: "📥 인터넷 파일 %1 을(를) 검사 후 %2 에 저장 (해시 %3 )", args0: [any("URL"), any("PATH"), any("HASH")], colour: 185,
+    tooltip: "https 주소만 받아요. ClamAV → YARA 검사를 통과해야 저장하고, 실행은 하지 않아요." }),
+  stmt({ type: "usb_open", message0: "📡 %1 포트를 %2 속도로 열기", args0: [any("PORT"), any("BAUD")], colour: 200 }),
+  stmt({ type: "serial_send", message0: "📡 %1 포트에 %2 보내기", args0: [any("PORT"), any("TEXT")], colour: 200 }),
+  { type: "serial_last", message0: "📡 %1 포트가 받은 글", args0: [any("PORT")], output: "String", colour: 200 },
+  { type: "usb_last", message0: "🔌 방금 연결/해제된 장치 이름", output: "String", colour: 200 },
+  { type: "usb_list", message0: "🔌 연결된 장치 목록", output: "String", colour: 200 },
+  { type: "battery_value", message0: "🔋 배터리 % (노트북만, 없으면 -1)", output: "Number", colour: 60 },
+  { type: "battery_charging", message0: "🔋 충전 중인가?", output: "Boolean", colour: 60 },
+]);
 // event blocks get the round "hat" top
-for (const t of ["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click"]) {
+for (const t of ["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click", "ev_usb_in", "ev_usb_out", "ev_serial"]) {
   const orig = Blockly.Blocks[t].init;
   Blockly.Blocks[t].init = function () { orig.call(this); this.hat = "cap"; };
 }
@@ -255,7 +271,7 @@ try { Blockly.libraryBlocks.loops.loopTypes.add("ctrl_forever"); } catch (e) {}
 // ------------------------------------------------------------------ code generators
 const F = G.forBlock;
 const call = (code) => [code, O.FUNCTION_CALL];
-const HATS = new Set(["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click"]);
+const HATS = new Set(["ev_start", "ev_key", "ev_click", "ev_change", "ev_every", "ev_msg", "ev_mouse", "ev_sprite_click", "ev_usb_in", "ev_usb_out", "ev_serial"]);
 // statement ids for the running-block highlight go through q() too, ids can come from shared files
 G.injectId = (msg, block) => msg.replace(/%1/g, q(block.id));
 let hatCount = 0;
@@ -309,6 +325,20 @@ F.var_show = (b) => `_watch(${varLabel(b)}, lambda: ${varName(b)})\n`;
 F.var_hide = (b) => `_unwatch(${varLabel(b)})\n`;
 F.mouse_pos = (b) => call(`_mouse(${q(pick(b, "AXIS", ["x", "y"]))})`);
 F.mouse_down = () => call("_mouse('down')");
+F.ev_usb_in = (b) => hat(b, "@_on('usb_in', 'any')");
+F.ev_usb_out = (b) => hat(b, "@_on('usb_out', 'any')");
+F.ev_serial = (b) => hat(b, `@_on('serial', ${q(b.getFieldValue("PORT"))})`);
+F.dl_save = (b) => `_download_checked(${val(b, "URL", "''")}, ${val(b, "PATH", "'download.bin'")}, ${val(b, "HASH", "''")})
+`;
+F.usb_open = (b) => `_serial_open(${val(b, "PORT", "'COM3'")}, ${val(b, "BAUD", "9600")})
+`;
+F.serial_send = (b) => `_serial_send(${val(b, "PORT", "'COM3'")}, ${val(b, "TEXT", "''")})
+`;
+F.serial_last = (b) => call(`_serial_last(${val(b, "PORT", "'COM3'")})`);
+F.usb_last = () => call("_STATE.get('usb_last', '')");
+F.usb_list = () => call("', '.join(_port_list())");
+F.battery_value = () => call("_battery()");
+F.battery_charging = () => call("_battery_charging()");
 F.net_text = (b) => call(`_net_text(${val(b, "URL", "''")})`);
 F.net_raw = (b) => call(`_net_get(${val(b, "URL", "''")})`);
 F.net_weather = (b) => call(`_weather(${val(b, "CITY", "'Seoul'")})`);
@@ -447,7 +477,17 @@ const toolbox = { kind: "categoryToolbox", contents: [
     blk("data_save", { KEY: T("최고점수"), V: N(0) }), blk("data_load", { KEY: T("최고점수"), DEF: N(0) }),
     blk("data_delete", { KEY: T("최고점수") }),
   ]),
+  cat("🔌 USB·시리얼", 200, [
+    label("USB 장치를 꽂거나 뽑을 때, 시리얼로 글을 주고받을 때 쓰는 블록이에요"),
+    blk("ev_usb_in"), blk("ev_usb_out"), blk("ev_serial"), blk("usb_open"), blk("serial_send"),
+    blk("serial_last"), blk("usb_last"), blk("usb_list"),
+  ]),
+  cat("🔋 배터리", 60, [
+    label("노트북에서만 값이 있어요. 데스크톱은 -1이에요"),
+    blk("battery_value"), blk("battery_charging"),
+  ]),
   cat("🌐 인터넷", 185, [
+    blk("dl_save", { URL: T("https://example.com/file.txt"), PATH: T("받은파일.txt"), HASH: T("") }),
     blk("net_weather", { CITY: T("서울") }), blk("net_text", { URL: T("https://example.com") }),
     blk("net_raw", { URL: T("https://api.github.com") }), blk("net_online"),
   ]),

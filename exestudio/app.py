@@ -279,6 +279,9 @@ def main():
         QTimer.singleShot(1200, win.offer_recovery)
     if settings.get("auto_update", True):
         QTimer.singleShot(2500, lambda: check_for_updates(ctx))
+    if not os.environ.get("EXESTUDIO_SELFTEST"):  # packages + virus DB, in the background, quietly
+        from .autosetup import run_all
+        run_async(run_all, lambda _: None, lambda _: None)
     shot = os.environ.get("EXESTUDIO_SELFTEST")
     if shot:  # opens the given page, saves a screenshot and quits (used to verify packaged builds)
         page = os.environ.get("EXESTUDIO_SELFTEST_PAGE", "blocks")

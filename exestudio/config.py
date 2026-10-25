@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "EXE Studio"
-APP_VERSION = "1.3.0"
+APP_VERSION = "1.4.0"
 FROZEN = getattr(sys, "frozen", False)
 
 

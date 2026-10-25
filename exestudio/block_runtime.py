@@ -22,7 +22,7 @@ _TITLE = "프로그램"
 _STOP = threading.Event()
 _STATE = {"answer": "", "active": 0, "keep_alive": False, "stage": None, "stage_window": None, "errors": 0}
 _COUNT_LOCK = threading.Lock()
-_HANDLERS = {"start": [], "key": [], "click": [], "change": [], "every": [], "msg": [], "mouse": [],
+_HANDLERS = {"start": [], "key": [], "click": [], "change": [], "every": [], "msg": [], "mouse": [], "usb_in": [], "usb_out": [], "serial": [],
              "sprite_click": []}
 _KEYS_DOWN = set()
 _CLICKABLE = {}
@@ -157,7 +157,7 @@ def _spawn(fn):
 
 def _fire(kind, arg=None):
     for a, fn in _HANDLERS[kind]:
-        if a == arg or (kind == "key" and a == "any"):
+        if a == arg or a == "any":
             _spawn(fn)
 
 
@@ -1158,6 +1158,165 @@ def _timer(action="value"):
     return round(end - _TIMER["start"], 1)
 
 
+# ---------------------------------------------------------------- download with virus check (never runs the file)
+try:
+    import serial as _serial
+    import serial.tools.list_ports as _list_ports
+except ImportError:
+    _serial = _list_ports = None
+try:
+    import psutil as _psutil
+except ImportError:
+    _psutil = None
+
+_SCAN_HOME = os.path.join(os.environ.get("LOCALAPPDATA", ""), "ExeStudio")
+_SCAN_EXCLUDE = [r"(?i)(webshell|chopper).*generic", r"(?i)generic.*(webshell|chopper)", r"(?i)^WEBSHELL_.*Generic"]
+_YARA = {}
+
+
+def _yara_rules():
+    if "rules" not in _YARA:
+        import yara
+        folder = os.path.join(_SCAN_HOME, "yara")
+        files = {os.path.splitext(n)[0]: os.path.join(folder, n) for n in os.listdir(folder)
+                 if n.lower().endswith((".yar", ".yara"))}
+        ext = {k: "" for k in ("filename", "filepath", "extension", "filetype", "md5", "owner")}
+        _YARA["ext"] = ext
+        _YARA["rules"] = yara.compile(filepaths=files, externals=ext)
+    return _YARA["rules"]
+
+
+def _download_checked(url, save_path, sha256=""):
+    """Downloads an https file, checks it with ClamAV then YARA, and saves it only if both pass. Never runs it."""
+    import hashlib
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    import urllib.request
+    url = str(url).strip()
+    if not url.lower().startswith("https://"):
+        raise RuntimeError("보안을 위해 https:// 주소만 내려받을 수 있어요.")
+    work = tempfile.mkdtemp(prefix="esd_dl_")
+    tmp = os.path.join(work, "download.bin")
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "EXE-Studio-download"})
+        with _released():
+            with urllib.request.urlopen(req, timeout=60) as r, open(tmp, "wb") as f:
+                total = 0
+                while True:
+                    chunk = r.read(1 << 16)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > 2 * 1024 ** 3:
+                        raise RuntimeError("파일이 2GB보다 커서 중지했어요.")
+                    f.write(chunk)
+        digest = hashlib.sha256(open(tmp, "rb").read()).hexdigest()
+        if str(sha256).strip() and digest != str(sha256).strip().lower():
+            raise RuntimeError("해시가 달라요. 받은 파일을 저장하지 않았어요.")
+        clam = os.path.join(_SCAN_HOME, "clamav-bin", "ClamAV", "clamscan.exe")
+        if not os.path.exists(clam):
+            raise RuntimeError("ClamAV가 없어서 검사할 수 없어요. 파일은 저장하지 않았어요.")
+        proc = subprocess.run([clam, "--no-summary", f"--database={os.path.join(_SCAN_HOME, 'clamav')}", tmp],
+                              capture_output=True, text=True, creationflags=0x08000000)
+        if proc.returncode == 1:
+            raise RuntimeError("ClamAV 탐지: " + (proc.stdout.strip() or "위협") + " — 저장하지 않았어요.")
+        if proc.returncode != 0:
+            raise RuntimeError("ClamAV 검사 오류 — 저장하지 않았어요.")
+        hits = [m.rule for m in _yara_rules().match(tmp, externals=_YARA["ext"])]
+        hits = [h for h in hits if not any(re.search(x, h) for x in _SCAN_EXCLUDE)]
+        if hits:
+            raise RuntimeError("YARA 탐지: " + ", ".join(hits[:5]) + " — 저장하지 않았어요.")
+        os.makedirs(os.path.dirname(os.path.abspath(str(save_path))) or ".", exist_ok=True)
+        shutil.copyfile(tmp, str(save_path))
+        return os.path.abspath(str(save_path))
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- USB and serial
+def _port_list():
+    if _list_ports is None:
+        return []
+    return sorted(p.device for p in _list_ports.comports())
+
+
+def _usb_watch():
+    last = set(_port_list())
+    while not _STOP.is_set():
+        time.sleep(1.0)
+        now = set(_port_list())
+        for dev in sorted(now - last):
+            _STATE["usb_last"] = dev
+            _fire("usb_in", dev)
+        for dev in sorted(last - now):
+            _STATE["usb_last"] = dev
+            _fire("usb_out", dev)
+        last = now
+
+
+_SERIAL = {}
+
+
+def _serial_open(port, baud=9600):
+    if _serial is None:
+        raise RuntimeError("시리얼 기능(pyserial)을 쓸 수 없어요.")
+    port = str(port).strip()
+    if port in _SERIAL:
+        return
+    try:
+        ser = _serial.Serial(port, int(_num(baud)), timeout=0.2)
+    except (_serial.SerialException, OSError) as e:
+        raise RuntimeError(f"{port} 포트를 열 수 없어요. 장치가 연결돼 있는지 확인하세요. ({e})")
+    _SERIAL[port] = {"ser": ser, "last": ""}
+    threading.Thread(target=_serial_reader, args=(port,), daemon=True).start()
+
+
+def _serial_reader(port):
+    info = _SERIAL[port]
+    ser, buf = info["ser"], b""
+    while not _STOP.is_set():
+        try:
+            data = ser.read(256)
+        except (_serial.SerialException, OSError):
+            break
+        if not data:
+            continue
+        buf += data
+        while b"\n" in buf:
+            line, buf = buf.split(b"\n", 1)
+            info["last"] = line.decode("utf-8", "replace").strip()
+            _fire("serial", port)
+
+
+def _serial_send(port, text):
+    info = _SERIAL.get(str(port).strip())
+    if not info:
+        raise RuntimeError(f"{port} 포트가 열려 있지 않아요. 먼저 '포트 열기' 블록을 실행하세요.")
+    info["ser"].write((str(text) + "\n").encode("utf-8"))
+
+
+def _serial_last(port):
+    info = _SERIAL.get(str(port).strip())
+    return info["last"] if info else ""
+
+
+def _battery():
+    """Battery percentage, or -1 when this PC has no battery (desktops)."""
+    if _psutil is None:
+        return -1
+    info = _psutil.sensors_battery()
+    return -1 if info is None else round(info.percent)
+
+
+def _battery_charging():
+    if _psutil is None:
+        return False
+    info = _psutil.sensors_battery()
+    return bool(info and info.power_plugged)
+
+
 # ---------------------------------------------------------------- running-block highlight (EXE Studio only)
 _TRACE = {"on": bool(os.environ.get("ESD_TRACE")), "last": 0.0, "cur": None}
 
@@ -1198,7 +1357,10 @@ def _esd_main(window_cls, has_design, title):
             getattr(w, signals[kind]).connect(lambda *_, n=name: _fire("change", n))
     need_window = bool(has_design or _HANDLERS["key"] or _HANDLERS["click"] or _HANDLERS["change"]
                        or _HANDLERS["mouse"] or _HANDLERS["sprite_click"])
-    _STATE["keep_alive"] = bool(need_window or _HANDLERS["every"])
+    _STATE["keep_alive"] = bool(need_window or _HANDLERS["every"] or _HANDLERS["usb_in"]
+                                or _HANDLERS["usb_out"] or _HANDLERS["serial"])
+    if _HANDLERS["usb_in"] or _HANDLERS["usb_out"]:
+        threading.Thread(target=_usb_watch, daemon=True).start()
     if need_window:
         _WIN.show()
     for _, fn in _HANDLERS["start"]:

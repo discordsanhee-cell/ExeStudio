@@ -9,3 +9,4 @@ __pycache__/
 *.pyc
 *.spec
 update_token.txt
+assets/clamav/*.msi
