@@ -15,6 +15,8 @@ from ..config import APP_NAME, APP_VERSION, BUNDLED_PYTHON, DATA_DIR, install_di
 from ..theme import THEMES
 from ..widgets import ColorButton, Page, PathPicker, button, card, label, open_path
 
+FEEDBACK_URL = 'https://forms.gle/1JTEg55Aomyd1PE4A'
+
 
 class SettingsPage(Page):
     TITLE = "설정"
@@ -106,6 +108,12 @@ class SettingsPage(Page):
             cpl.addWidget(box)
         self.root.addWidget(cp)
         self._refresh_path_boxes()
+
+        cf, cfl = card()
+        cfl.addWidget(label("💬 피드백", "H2"))
+        cfl.addWidget(label("버그나 바라는 기능을 알려 주세요. 로그인 없이 보낼 수 있어요.", "Sub", wrap=True))
+        cfl.addWidget(button("💬 피드백 보내기", lambda: open_path(FEEDBACK_URL), accent=True))
+        self.root.addWidget(cf)
 
         cu, cul = card()
         cul.addWidget(label("🔄 업데이트", "H2"))
